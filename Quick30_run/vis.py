@@ -31,6 +31,10 @@ import joblib
 
 from sklearn.decomposition import FastICA
 
+
+#this is the main project currently
+
+
 class LSLStreamReceiver:
     def __init__(self, stream_type='EEG', time_range=5):
         self.stream_type = stream_type
