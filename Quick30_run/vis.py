@@ -11,6 +11,8 @@ from scipy.signal import butter, filtfilt
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton,
                              QComboBox, QLabel, QLineEdit, QHBoxLayout)
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
+from PyQt5.QtWidgets import QGroupBox
 import sys
 import numpy as np
 import mne
@@ -563,10 +565,29 @@ def eeg_filter(data, srate, cutoff=0.5, order=2):
     return filtfilt(b, a, data, axis=1)
 
 
-def analyze_bandpower(chunk, raw, srate, labels):
-    pass
-    #print("chunk shape:", chunk.shape)  # debug
-    #print("raw shape:", raw.shape)      # debug
+def analyze_bandpower(chunk, raw, srate, labels, gui=None):
+    try:
+        freqs, psd = welch(chunk, fs=srate, nperseg=srate, axis=1)
+        band_dict = {}
+        for band, (fmin, fmax) in {
+            'delta': (1, 4),
+            'theta': (4, 8),
+            'alpha': (8, 13),
+            'beta': (13, 30),
+            'gamma': (30, 45)
+        }.items():
+            idx = (freqs >= fmin) & (freqs <= fmax)
+            if np.any(idx):
+                band_dict[band] = float(np.mean(psd[:, idx]))
+
+        if gui and gui.bandpower_plot:
+            gui.bandpower_plot.update_bandpower(band_dict)
+
+    except Exception as e:
+        print("❌ analyze_bandpower 错误:", e)
+
+
+
 
 
 
@@ -1155,8 +1176,103 @@ class ChannelManager:
 # print("采样率为：", self.channel_manager.srate)
 
 
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from PyQt5.QtWidgets import QWidget, QVBoxLayout
+import numpy as np
+
+class BandpowerStreamVisualizer(QWidget):
+    def __init__(self, bands=('delta', 'theta', 'alpha', 'beta', 'gamma'), history_length=300):
+        super().__init__()
+        self.bands = bands
+        self.history_length = history_length
+        self.history = {band: [0] * history_length for band in self.bands}
+        self.timestamps = list(range(-history_length + 1, 1))
+
+        self.fig, self.ax = plt.subplots(figsize=(6, 4))
+        self.canvas = FigureCanvas(self.fig)
+        layout = QVBoxLayout()
+        layout.addWidget(self.canvas)
+        self.setLayout(layout)
+
+        # 初始化 line 和 legend label
+        self.offsets = np.arange(len(self.bands)) * 30
+        self.lines = {}
+        self.text_labels = {}
+
+        for i, band in enumerate(self.bands):
+            line, = self.ax.plot([], [], label=f"{band}: 0.00", linewidth=1.5)
+            self.lines[band] = line
+
+        # 设置图像基本信息
+        self.ax.set_xlim(-self.history_length + 1, 0)
+        self.ax.set_xlabel("Time (chunks)")
+        self.ax.set_title("Real-time Bandpower Waveform")
+
+        # 外部图例
+        self.ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
+
+        self.fig.tight_layout()
+
+    def update_bandpower(self, band_values):
+        for band in self.bands:
+            if band in band_values:
+                self.history[band].append(band_values[band])
+                if len(self.history[band]) > self.history_length:
+                    self.history[band].pop(0)
+
+        self.ax.clear()
+
+        # 1. 计算中位数 + 高百分位（抗异常）
+        all_vals = np.concatenate([np.array(self.history[band]) for band in self.bands])
+        sorted_vals = np.sort(all_vals)
+        low_percentile = int(0.05 * len(sorted_vals))
+        high_percentile = int(0.95 * len(sorted_vals))
+        safe_vals = sorted_vals[low_percentile:high_percentile]
+        safe_max = np.max(safe_vals) if len(safe_vals) > 0 else 1.0
+
+        # 2. 添加偏移
+        safe_max += 40
+
+        # 3. 限制最大高度（防炸）
+        safe_max = min(safe_max, 200)
+
+        # ✅ 绘制每个频段曲线并标注当前值
+        for i, band in enumerate(self.bands):
+            data = np.array(self.history[band])
+
+            recent_window = data[-100:] if len(data) >= 100 else data
+            band_min = np.min(recent_window)
+            band_max = np.max(recent_window)
+            range_ = band_max - band_min
+            if range_ < 1e-3:
+                range_ = 1.0
+            norm_data = (data - band_min) / range_
+
+            scaled_data = norm_data * 20 + self.offsets[i]
+
+            self.ax.plot(self.timestamps[-len(data):], scaled_data,
+                         label=f"{band}: {data[-1]:.2f}", linewidth=1.5)
+
+        # 4. 设置 Y 轴等属性
+        self.ax.set_ylim(-10, safe_max)
+        self.ax.set_yticks(self.offsets)
+        self.ax.set_yticklabels(self.bands)
+        self.ax.set_xlabel("Time (chunks)")
+        self.ax.set_title("Real-time Bandpower Waveform")
+
+        # ✅ 图例放右侧，并避免警告
+        handles, labels = self.ax.get_legend_handles_labels()
+        if labels:
+            self.ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
+
+        self.fig.tight_layout()
+        self.canvas.draw()
+
 
 # GUI界面嵌入Matplotlib绘图
+from PyQt5.QtWidgets import QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QCheckBox, QGroupBox
+
 class EEGGUI(QWidget):
     def __init__(self):
         super().__init__()
@@ -1165,11 +1281,19 @@ class EEGGUI(QWidget):
 
         self.receiver = LSLStreamReceiver()
         self.viewer = LSLStreamVisualizer(self.receiver)
-        self.regressor = RealTimeRegressor(gui=self)  # ← 把 GUI 本身传进去
+        self.regressor = RealTimeRegressor(gui=self)
 
-        layout = QVBoxLayout()
+        # ========== 创建 Tab 界面 ==========
+        self.tabs = QTabWidget()
+        self.tab_main = QWidget()
+        self.tab_bandpower = QWidget()
+        self.tabs.addTab(self.tab_main, "EEG Viewer")
+        self.tabs.addTab(self.tab_bandpower, "Bandpower Plot")
+
+        # ========== 主界面 Tab ==========
+        main_layout = QVBoxLayout()
         self.canvas = FigureCanvas(self.viewer.fig)
-        layout.addWidget(self.canvas)
+        main_layout.addWidget(self.canvas)
 
         self.cutoff_input1 = QLineEdit("0.5")
         self.cutoff_input2 = QLineEdit("45")
@@ -1178,41 +1302,49 @@ class EEGGUI(QWidget):
         cutoff_layout.addWidget(self.cutoff_input1)
         cutoff_layout.addWidget(QLabel("Upper Cutoff:"))
         cutoff_layout.addWidget(self.cutoff_input2)
-        layout.addLayout(cutoff_layout)
+        main_layout.addLayout(cutoff_layout)
 
         self.start_btn = QPushButton("Start Stream")
         self.start_btn.clicked.connect(self.start_stream)
-        layout.addWidget(self.start_btn)
+        main_layout.addWidget(self.start_btn)
 
         self.update_btn = QPushButton("Update Filter")
         self.update_btn.clicked.connect(self.update_filter_params)
-        layout.addWidget(self.update_btn)
+        main_layout.addWidget(self.update_btn)
 
-        #ASR
         self.asr_checkbox = QCheckBox("Enable ASR (pyPREP)")
-        layout.addWidget(self.asr_checkbox)
+        main_layout.addWidget(self.asr_checkbox)
 
-
-
-
-
-        #attention
+        # attention display
         self.att_label = QLabel("🎯 注意力水平")
         self.att_circle = QLabel()
         self.att_circle.setFixedSize(100, 100)
         self.att_circle.setStyleSheet("border-radius: 50px; background-color: green;")
-        layout.addWidget(self.att_label)
-        layout.addWidget(self.att_circle)
-
+        main_layout.addWidget(self.att_label)
+        main_layout.addWidget(self.att_circle)
 
         self.attention_ball_window = AttentionBallWindow()
         self.attention_ball_window.show()
 
         self.channel_select_btn = QPushButton("Select Channels")
         self.channel_select_btn.clicked.connect(self.open_channel_selector)
-        layout.addWidget(self.channel_select_btn)
+        main_layout.addWidget(self.channel_select_btn)
 
-        self.setLayout(layout)
+        self.tab_main.setLayout(main_layout)
+
+        # ========== Bandpower Tab ==========
+        # 新增 bandpower 可视化器
+        self.bandpower_plot = BandpowerStreamVisualizer()
+        bp_layout = QVBoxLayout()
+        bp_layout.addWidget(self.bandpower_plot)
+        self.tab_bandpower.setLayout(bp_layout)
+        self.tabs.addTab(self.tab_bandpower, "Bandpower Waveform")
+
+        # ========== 外层 Layout ==========
+        outer_layout = QVBoxLayout()
+        outer_layout.addWidget(self.tabs)
+        self.setLayout(outer_layout)
+
 
     def start_stream(self):
         self.update_filter_params()
@@ -1225,6 +1357,9 @@ class EEGGUI(QWidget):
 
         self.attention_estimator = RealTimeAttentionEstimator(gui=self,receiver=self.receiver)
         self.receiver.register_analysis_callback(self.attention_estimator.callback)
+
+
+        self.receiver.register_analysis_callback(lambda **kwargs: analyze_bandpower(gui=self, **kwargs))
 
     def update_filter_params(self):
         try:
