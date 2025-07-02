@@ -1,4 +1,5 @@
 import threading
+import time
 
 from pylsl import StreamInlet, resolve_byprop
 import numpy as np
@@ -43,10 +44,35 @@ class LSLStreamReceiver:
 
         #ORICA
         self.orica = None
+        self.latest_sources = None
+        self.latest_eog_indices = None
+
+        #当我在切换通道的过程中，会让ic的个数发生改变，但是此时buffer还在运行，会导致卡死，
+        #所以我需要把通道切换过程锁住
+        self.lock = threading.Lock()
+
+    #Selected channel indices: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+    #Selected channel labels: ['AF7', 'Fpz', 'F7', 'Fz', 'T7', 'FC6', 'F4', 'C4', 'Oz', 'CP6', 'Cz', 'PO8', 'CP5', 'O2', 'O1', 'P3', 'P4', 'P7', 'P8', 'Pz', 'PO7', 'T8', 'C3', 'Fp2', 'F3', 'F8', 'FC5', 'AF8']
+    #上面就是channel_range和channel_labels的格式，要调用函数就传入这样的list
+    def set_channel_range_and_labels(self, new_range, new_labels):
+        with self.lock:
+            self.channel_range = new_range
+            self.chan_labels = new_labels
+            self.nbchan = len(new_range)
+            self.reinitialize_orica()
+            print(f"🔁 通道更新: {self.chan_labels}")
 
     def register_analysis_callback(self, callback_fn):
         """注册一个函数用于处理每次更新后的数据段 chunk"""
         self.analysis_callbacks.append(callback_fn)
+
+    def reinitialize_orica(self):
+        self.orica = ORICAProcessor(
+            n_components=len(self.channel_range),
+            max_samples=self.srate * 3,
+            srate=self.srate
+        )
+        print("🔁 ORICA processor re-initialized with new channel range.")
 
     def find_and_open_stream(self):
         print(f"Searching for LSL stream with type = '{self.stream_type}'...")
@@ -106,11 +132,10 @@ class LSLStreamReceiver:
 
 
         # ✅ 初始化 ORICA
-        self.orica = ORICAProcessor(
-            n_components=len(self.channel_range),
-            max_samples=self.srate * 3
-        )
-        print("✅ ORICA processor initialized.")
+        self.reinitialize_orica()
+
+
+
 
     def pull_and_update_buffer(self):
         samples, timestamps = self.inlet.pull_chunk(timeout=0.0)
@@ -129,6 +154,7 @@ class LSLStreamReceiver:
             chunk = EEGSignalProcessor.eeg_filter(chunk, self.srate, cutoff=self.cutoff)
 
 
+
             # ✅ 更新原始滤波后的 buffer（raw_buffer）
             self.last_unclean_chunk = chunk.copy()
             if self.raw_buffer is not None:
@@ -137,16 +163,18 @@ class LSLStreamReceiver:
 
 
 
-            # Step X: ORICA 去眼动伪影
-            #print(np.array(chunk[self.channel_range, :]).shape)#(29, 64)
-            #print(np.array(chunk).shape)#(37, 64)
-            # if self.orica.update_buffer(chunk[self.channel_range, :]):#输出true的同时，更新了窗口
-            #     if self.orica.fit(self.orica.data_buffer):
-            #         chunk[self.channel_range, :] = self.orica.transform(chunk[self.channel_range, :])
+            #✅ Step X: ORICA 去眼动伪影
+            if self.orica.update_buffer(chunk[self.channel_range, :]):
+                if self.orica.fit(self.orica.data_buffer):
+                    cleaned = self.orica.transform(chunk[self.channel_range, :])
+                    chunk[self.channel_range, :] = cleaned
 
+                    # ✅ 新增：保存当前 ICA sources 用于可视化
+                    self.latest_sources = self.orica.ica.transform(
+                        self.orica.data_buffer.T).T  # (components, samples)
 
-
-
+                    # ✅ 可选：也保存 EOG 伪影成分索引
+                    self.latest_eog_indices = self.orica.eog_indices
 
             # Step 2
             if self.use_asr:
@@ -185,6 +213,50 @@ class LSLStreamReceiver:
                     thread.start()
                 except Exception as e:
                     print(f"❌ 回调分析函数错误: {e}")
+
+    # def pull_and_update_buffer(self):
+    #     samples, timestamps = self.inlet.pull_chunk(timeout=0.0)
+    #     if timestamps:
+    #         chunk = np.array(samples).T  # shape: (channels, samples)
+    #
+    #         chunk = EEGSignalProcessor.eeg_filter(chunk, self.srate, cutoff=self.cutoff)
+    #
+    #         with self.lock:
+    #             self.last_unclean_chunk = chunk.copy()
+    #             if self.raw_buffer is not None:
+    #                 self.raw_buffer = np.roll(self.raw_buffer, -chunk.shape[1], axis=1)
+    #                 self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
+    #
+    #             # ORICA 去伪影
+    #             if self.orica.update_buffer(chunk[self.channel_range, :]):
+    #                 if self.orica.fit(self.orica.data_buffer):
+    #                     cleaned = self.orica.transform(chunk[self.channel_range, :])
+    #                     chunk[self.channel_range, :] = cleaned
+    #                     self.latest_sources = self.orica.ica.transform(self.orica.data_buffer.T).T
+    #                     self.latest_eog_indices = self.orica.eog_indices
+    #
+    #             if self.use_asr:
+    #                 chunk = self.apply_pyprep_asr(chunk)
+    #
+    #             num_new = chunk.shape[1]
+    #             self.buffer = np.roll(self.buffer, -num_new, axis=1)
+    #             self.buffer[:, -num_new:] = chunk
+    #
+    #         # 回调函数（异步线程）
+    #         for fn in self.analysis_callbacks:
+    #             try:
+    #                 thread = threading.Thread(
+    #                     target=fn,
+    #                     kwargs=dict(
+    #                         chunk=self.buffer[self.channel_range, :],
+    #                         raw=self.raw_buffer[self.channel_range, :],
+    #                         srate=self.srate,
+    #                         labels=self.chan_labels
+    #                     )
+    #                 )
+    #                 thread.start()
+    #             except Exception as e:
+    #                 print(f"❌ 回调分析函数错误: {e}")
 
     def print_latest_channel_values(self):
         pass

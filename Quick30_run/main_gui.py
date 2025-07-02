@@ -14,7 +14,8 @@ from regression_model import RealTimeRegressor
 from attention_ball import AttentionBallWindow
 from bandpower_plot import BandpowerStreamVisualizer
 from filter_utils import EEGSignalProcessor
-
+from ica_component_window import ICAComponentWindow
+from orica_processor import ORICAProcessor
 
 from channel_selector import ChannelSelectorDialog
 
@@ -27,7 +28,6 @@ class EEGGUI(QWidget):
         self.receiver = LSLStreamReceiver()
         self.viewer = LSLStreamVisualizer(self.receiver)
         self.regressor = RealTimeRegressor(gui=self)
-        self.processor = EEGSignalProcessor()
 
         # ========== 创建 Tab 界面 ==========
         self.tabs = QTabWidget()
@@ -86,6 +86,13 @@ class EEGGUI(QWidget):
         self.tab_bandpower.setLayout(bp_layout)
         self.tabs.addTab(self.tab_bandpower, "Bandpower Waveform")
 
+        # ========== ICA window ==========
+        self.ica_btn = QPushButton("Show ICA Components")
+        self.ica_btn.clicked.connect(self.show_ica_window)
+        main_layout.addWidget(self.ica_btn)
+
+        self.ica_window = None  # 初始化为空
+
         # ========== 外层 Layout ==========
         outer_layout = QVBoxLayout()
         outer_layout.addWidget(self.tabs)
@@ -97,7 +104,7 @@ class EEGGUI(QWidget):
         self.viewer.start()
         self.canvas.draw()
 
-        self.receiver.register_analysis_callback(analyze_bandpower)
+        #self.receiver.register_analysis_callback(analyze_bandpower)
         #self.receiver.register_analysis_callback(self.regressor.callback)
 
         self.attention_estimator = RealTimeAttentionEstimator(gui=self,receiver=self.receiver)
@@ -106,7 +113,8 @@ class EEGGUI(QWidget):
 
         self.receiver.register_analysis_callback(lambda **kwargs: analyze_bandpower(gui=self, **kwargs))
 
-        self.receiver.register_analysis_callback(self.processor.heavy_analysis)
+        self.receiver.register_analysis_callback(EEGSignalProcessor.heavy_analysis)
+        #这里注册的回调函数必须先实例化，然后通过实例化引用这个方法。但是我已经把这个函数作为static状态了，后续可以研究一下
 
     def update_filter_params(self):
         try:
@@ -177,6 +185,23 @@ class EEGGUI(QWidget):
         else:
             print("⚠️ 通道标签尚未加载，无法选择通道")
 
+    def show_ica_window(self):
+        sources = self.receiver.latest_sources  # 从 stream_receiver 获取 ICA 分量
+        if sources is None:
+            print("❌ 当前没有 ICA 成分可视化")
+            return
+
+        if self.ica_window is None:
+            self.ica_window = ICAComponentWindow(ica_sources=sources)
+        else:
+            self.ica_window.update_sources(sources)
+
+        # ✅ 设置高亮的 EOG 成分（红色显示）
+        if hasattr(self.receiver, 'latest_eog_indices'):
+            self.ica_window.set_eog_indices(self.receiver.latest_eog_indices)
+
+        self.ica_window.show()
+        self.ica_window.raise_()
 
 
 if __name__ == '__main__':

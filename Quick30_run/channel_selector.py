@@ -48,8 +48,10 @@ class ChannelSelectorDialog(QDialog):
                 selected_labels.append(ch["label"])
 
         # 更新 receiver 的通道范围和标签
-        self.receiver.channel_range = selected_indices
-        self.receiver.chan_labels = selected_labels
+        #self.receiver.channel_range = (
+        self.receiver.set_channel_range_and_labels(selected_indices,selected_labels)
+
+
 
         print(f"✅ Selected channel indices: {selected_indices}")
         print(f"✅ Selected channel labels: {selected_labels}")

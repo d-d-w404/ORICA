@@ -3,7 +3,8 @@ from scipy.signal import butter, filtfilt, welch
 import time
 
 class EEGSignalProcessor:
-
+    @staticmethod
+    #先于callback，用于receiver的预处理部分
     def eeg_filter(data, srate, cutoff=0.5, order=2):
         nyq = 0.5 * srate
         if isinstance(cutoff, (list, tuple)) and len(cutoff) == 2:
@@ -23,7 +24,7 @@ class EEGSignalProcessor:
         b, a = butter(order, normal_cutoff, btype=mode, analog=False)
         return filtfilt(b, a, data, axis=1)
 
-
+    @staticmethod
     def clean_bad_channels(chunk, labels=None, threshold_uv=200):
         stds = np.std(chunk, axis=1)
         bad_indices = np.where(stds > threshold_uv)[0]
@@ -42,11 +43,12 @@ class EEGSignalProcessor:
                     print(f"⚠️ 替换了异常通道: 索引 {bad_indices}")
         return chunk
 
-    def heavy_analysis(self, chunk, raw, srate, labels):
+    @staticmethod
+    def heavy_analysis( chunk, raw, srate, labels):
         t0 = time.time()
         try:
             if not isinstance(chunk, np.ndarray) or chunk.ndim != 2:
-                print("❗ chunk 非法，跳过分析。shape:", np.shape(chunk))
+                print("❗ chunk 非法，跳过分析。shape x:", np.shape(chunk))
                 return
             if not isinstance(raw, np.ndarray) or raw.ndim != 2:
                 print("❗ raw 非法，跳过分析。shape:", np.shape(raw))
