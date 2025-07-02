@@ -54,7 +54,7 @@ class ORICAProcessor:
             ratio = low_freq_power / (total_power + 1e-10)
 
 
-            if ratio > 0.2:  # 如果低频占比超过阈值，认为是 EOG
+            if ratio > 0.22:  # 如果低频占比超过阈值，认为是 EOG
                 self.eog_indices.append(i)
 
         print("EOG artifact indices (low-freq based):", self.eog_indices)

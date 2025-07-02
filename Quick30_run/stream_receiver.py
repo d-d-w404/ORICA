@@ -8,7 +8,7 @@ from filter_utils import EEGSignalProcessor
 from orica_processor import ORICAProcessor
 from asrpy import ASR
 import mne
-
+from scipy.signal import medfilt
 
 class LSLStreamReceiver:
     def __init__(self, stream_type='EEG', time_range=5):
@@ -69,7 +69,7 @@ class LSLStreamReceiver:
     def reinitialize_orica(self):
         self.orica = ORICAProcessor(
             n_components=len(self.channel_range),
-            max_samples=self.srate * 3,
+            max_samples=self.srate * 5,
             srate=self.srate
         )
         print("🔁 ORICA processor re-initialized with new channel range.")
@@ -176,6 +176,8 @@ class LSLStreamReceiver:
                     # ✅ 可选：也保存 EOG 伪影成分索引
                     self.latest_eog_indices = self.orica.eog_indices
 
+            #我先设定一个窗口，让chunk填满这个窗口。
+
             # Step 2
             if self.use_asr:
                 chunk = self.apply_pyprep_asr(chunk)
@@ -259,13 +261,18 @@ class LSLStreamReceiver:
     #                 print(f"❌ 回调分析函数错误: {e}")
 
     def print_latest_channel_values(self):
-        pass
-        # print("--- EEG Channel Values (last column) ---")
-        # for i, ch in enumerate(self.channel_range):
-        #     label = self.chan_labels[i]
-        #     value = self.buffer[ch, -1]
-        #     rms = np.sqrt(np.mean(self.buffer[ch]**2))
-        #     print(f"{label}: {value:.2f} (RMS: {rms:.2f})")
+        if self.buffer is None:
+            print("⚠️ Buffer 尚未初始化，无法打印通道值")
+            return
+
+        print("--- EEG Channel Values (Last Sample) ---")
+        for i, ch_idx in enumerate(self.channel_range):
+            label = self.chan_labels[i]
+            last_value = self.buffer[ch_idx, -1]
+            rms = np.sqrt(np.mean(self.buffer[ch_idx] ** 2))
+            print(f"{label:>4}: {last_value:>8.2f} μV | RMS: {rms:.2f}")
+
+
 
     def apply_pyprep_asr(self, chunk):
         try:
@@ -307,7 +314,7 @@ class LSLStreamReceiver:
                     self.asr_instance = ASR(
                         sfreq=self.srate,
 
-                        cutoff=3,
+                        cutoff=2,
                         win_len=0.5,
                         win_overlap=0.66,
                         blocksize=self.srate
@@ -331,6 +338,14 @@ class LSLStreamReceiver:
 
                 cleaned_raw = self.asr_instance.transform(raw_chunk)
                 chunk[self.channel_range, :] = cleaned_raw.get_data()
+
+
+
+                # 在 ASR 后加个中值滤波处理，平滑
+                cleaned_chunk = cleaned_raw.get_data()
+                cleaned_chunk = medfilt(cleaned_chunk, kernel_size=(1, 5))  # 保通道不变，仅时间平滑
+                chunk[self.channel_range, :] = cleaned_chunk
+
 
         except Exception as e:
             print("❌ Error in apply_pyprep_asr:", e)

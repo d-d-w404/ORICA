@@ -1,3 +1,6 @@
+import threading
+import time
+
 from PyQt5.QtWidgets import QApplication
 
 
@@ -98,6 +101,17 @@ class EEGGUI(QWidget):
         outer_layout.addWidget(self.tabs)
         self.setLayout(outer_layout)
 
+
+
+
+        # 添加这个函数到类中或文件外部
+        def periodic_print(receiver, interval_sec=1):
+            while True:
+                time.sleep(interval_sec)
+                receiver.print_latest_channel_values()
+
+        # 然后在 EEGGUI.__init__ 末尾添加：
+        threading.Thread(target=periodic_print, args=(self.receiver,), daemon=True).start()
 
     def start_stream(self):
         self.update_filter_params()
