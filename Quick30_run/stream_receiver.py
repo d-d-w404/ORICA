@@ -4,7 +4,7 @@ import time
 from pylsl import StreamInlet, resolve_byprop
 import numpy as np
 from filter_utils import EEGSignalProcessor
-
+from pylsl import resolve_streams
 from orica_processor import ORICAProcessor
 from asrpy import ASR
 import mne
@@ -75,13 +75,24 @@ class LSLStreamReceiver:
         print("🔁 ORICA processor re-initialized with new channel range.")
 
     def find_and_open_stream(self):
+
+        #check the whole stream
+        streams = resolve_streams()
+        print("🔍 当前可用的 LSL 流：")
+        for i, stream in enumerate(streams):
+            print(
+                f"[{i}] Name: {stream.name()}, Type: {stream.type()}, Channels: {stream.channel_count()}, ID: {stream.source_id()}")
+        #--------------------------------------
+
         print(f"Searching for LSL stream with type = '{self.stream_type}'...")
         streams = resolve_byprop('type', self.stream_type, timeout=5)
 
         if not streams:
             raise RuntimeError(f"No LSL stream with type '{self.stream_type}' found.")
 
-        self.inlet = StreamInlet(streams[0])
+        #我使用REST做LSL的时候有两个lsl,都是eeg类型，这里应该会默认选择第一个，但是第一个不是lsl output的，会卡死
+        #这里暂时使用1，因为0用不了老是卡死
+        self.inlet = StreamInlet(streams[1])
         info = self.inlet.info()
 
         print("=== StreamInfo XML description ===")
@@ -315,8 +326,8 @@ class LSLStreamReceiver:
                         sfreq=self.srate,
 
                         cutoff=2,
-                        win_len=0.5,
-                        win_overlap=0.66,
+                        win_len=2,
+                        win_overlap=0.8,
                         blocksize=self.srate
                     )
 
