@@ -30,17 +30,10 @@ class LSLStreamReceiver:
         self.asr_calibration_buffer = None
         self.prep_reference = None
 
-
         self.raw_buffer = None  # 存放未 ASR 的 bandpass-only 历史数据
 
-        self.analysis_callbacks = []  # 存放所有回调分析函数
-
-        # 在线回归模型（情绪强度）
-        # self.online_model = SGDRegressor(learning_rate='adaptive', eta0=0.01)
-        # self.scaler = StandardScaler()
-        # self.first_fit_done = False
-        # self.first_fit_lock = threading.Lock()  # 🔒 加锁
-
+        # ✅ 移除callback机制，改为纯数据接口模式
+        # self.analysis_callbacks = []  # 存放所有回调分析函数
 
         #ORICA
         self.orica = None
@@ -50,29 +43,19 @@ class LSLStreamReceiver:
         #当我在切换通道的过程中，会让ic的个数发生改变，但是此时buffer还在运行，会导致卡死，
         #所以我需要把通道切换过程锁住
         self.lock = threading.Lock()
+        
+        # ✅ 新增：数据更新线程控制
+        self.data_update_thread = None
+        self.is_running = False
+        self.update_interval = 0.1  # 100ms更新间隔
+        
+        # ✅ 新增：数据接口相关
+        self.last_unclean_chunk = None  # 最新的原始数据块
+        self.last_processed_chunk = None  # 最新的处理后数据块
+        self.data_timestamp = 0  # 数据时间戳，用于检测数据更新
 
-    #Selected channel indices: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
-    #Selected channel labels: ['AF7', 'Fpz', 'F7', 'Fz', 'T7', 'FC6', 'F4', 'C4', 'Oz', 'CP6', 'Cz', 'PO8', 'CP5', 'O2', 'O1', 'P3', 'P4', 'P7', 'P8', 'Pz', 'PO7', 'T8', 'C3', 'Fp2', 'F3', 'F8', 'FC5', 'AF8']
-    #上面就是channel_range和channel_labels的格式，要调用函数就传入这样的list
-    def set_channel_range_and_labels(self, new_range, new_labels):
-        with self.lock:
-            self.channel_range = new_range
-            self.chan_labels = new_labels
-            self.nbchan = len(new_range)
-            self.reinitialize_orica()
-            print(f"🔁 通道更新: {self.chan_labels}")
-
-    def register_analysis_callback(self, callback_fn):
-        """注册一个函数用于处理每次更新后的数据段 chunk"""
-        self.analysis_callbacks.append(callback_fn)
-
-    def reinitialize_orica(self):
-        self.orica = ORICAProcessor(
-            n_components=len(self.channel_range),
-            max_samples=self.srate * 5,
-            srate=self.srate
-        )
-        print("🔁 ORICA processor re-initialized with new channel range.")
+        #用于画图时，保证处理后的数据和处理前的能够在时间上吻合
+        self.chunk_pairs = []  # [(timestamp, unclean, processed)]
 
     def find_and_open_stream(self):
 
@@ -85,14 +68,18 @@ class LSLStreamReceiver:
         #--------------------------------------
 
         print(f"Searching for LSL stream with type = '{self.stream_type}'...")
-        streams = resolve_byprop('type', self.stream_type, timeout=5)
+        #streams = resolve_byprop('type', self.stream_type, timeout=5)
+
+        #暂时使用name筛选stream
+        stream_name = 'mybrain'
+        streams = resolve_byprop('name', stream_name, timeout=5)
 
         if not streams:
             raise RuntimeError(f"No LSL stream with type '{self.stream_type}' found.")
 
         #我使用REST做LSL的时候有两个lsl,都是eeg类型，这里应该会默认选择第一个，但是第一个不是lsl output的，会卡死
         #这里暂时使用1，因为0用不了老是卡死
-        self.inlet = StreamInlet(streams[1])
+        self.inlet = StreamInlet(streams[0])
         info = self.inlet.info()
 
         print("=== StreamInfo XML description ===")
@@ -122,7 +109,86 @@ class LSLStreamReceiver:
 
 
         # 或者自定义排除某些关键词
-        exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','A2']
+#         channel_all = [
+#     'AF7',      # 0
+#     'Fpz',      # 1
+#     'F7',       # 2
+#     'Fz',       # 3
+#     'T7',       # 4
+#     'FC6',      # 5
+#     'Fp1',      # 6
+#     'F4',       # 7
+#     'C4',       # 8
+#     'Oz',       # 9
+#     'CP6',      # 10
+#     'Cz',       # 11
+#     'PO8',      # 12
+#     'CP5',      # 13
+#     'O2',       # 14
+#     'O1',       # 15
+#     'P3',       # 16
+#     'P4',       # 17
+#     'P7',       # 18
+#     'P8',       # 19
+#     'Pz',       # 20
+#     'PO7',      # 21
+#     'T8',       # 22
+#     'C3',       # 23
+#     'Fp2',      # 24
+#     'F3',       # 25
+#     'F8',       # 26
+#     'FC5',      # 27
+#     'AF8',      # 28
+#     'A2',       # 29
+#     'ExG 1',    # 30
+#     'ExG 2'     # 31
+# ]
+
+        exclude = [
+            'AF7',      # 0
+            'Fpz',      # 1
+            'F7',       # 2
+            #'Fz',       # 3
+            #'T7',       # 4
+            'FC6',      # 5
+            'Fp1',      # 6
+            #'F4',       # 7
+            'C4',       # 8
+            'Oz',       # 9
+            'CP6',      # 10
+            'Cz',       # 11
+            'PO8',      # 12
+            'CP5',      # 13
+            #'O2',       # 14
+            #'O1',       # 15
+            'P3',       # 16
+            'P4',       # 17
+            'P7',       # 18
+            'P8',       # 19
+            #'Pz',       # 20
+            'PO7',      # 21
+            #'T8',       # 22
+            'C3',       # 23
+            'Fp2',      # 24
+            #'F3',       # 25
+            'F8',       # 26
+            'FC5',      # 27
+            'AF8',      # 28
+            'A2',       # 29
+            'ExG 1',    # 30
+            'ExG 2'     # 31
+            'TRIGGER',
+            'ACC34',
+            'ACC33',
+            'ACC32',
+            'Packet Counter',
+            'ACC',
+        ]
+        
+        #前额的5个通道
+        #exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC','A2','Oz','P3','F8','PO8','F7','Fz', 'T7', 'FC6', 'F4', 'C4', 'CP6', 'Cz', 'CP5', 'O2', 'O1', 'P4', 'P7', 'P8', 'Pz', 'PO7', 'T8', 'C3', 'F3', 'FC5']
+
+        #exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC','A2','Oz','P3','F8','PO8','F7']
         self.chan_labels = self.channel_manager.get_labels_excluding_keywords(exclude)
         self.channel_range = self.channel_manager.get_indices_excluding_keywords(exclude)
 
@@ -147,49 +213,81 @@ class LSLStreamReceiver:
 
 
 
+    def process_orica(self, chunk):
+        """
+        对输入的chunk进行ORICA伪影去除处理。
+        输入：chunk（shape: 通道数, 样本数），只处理self.channel_range对应的通道。
+        输出：
+            cleaned_chunk: 伪影去除后的chunk（只对self.channel_range部分做了修改，其余通道不变）
+            ica_sources: ICA源信号（components, samples），可用于可视化
+            eog_indices: EOG伪影成分索引
+            A: ICA mixing matrix (通道数, 成分数)
+            spectrum: dict，包含所有IC分量的频谱（'freqs': 频率, 'powers': shape=(n_components, n_freqs)）
+        """
+        import numpy as np
+        from scipy.signal import welch
+        cleaned_chunk = chunk.copy()
+        ica_sources = None
+        eog_indices = None
+        A = None
+        spectrum = None
+        # ORICA处理
+        if self.orica is not None:
+            if self.orica.update_buffer(chunk[self.channel_range, :]):
+                if self.orica.fit(self.orica.data_buffer, self.channel_range, self.chan_labels, self.srate):
+                    #classify
+                    # ic_probs, ic_labels = self.orica.classify(chunk[self.channel_range, :],self.chan_labels, self.srate)
+                    # if ic_probs is not None and ic_labels is not None:
+                    #     print('ICLabel概率:', ic_probs)
+                    #     print('ICLabel标签:', ic_labels)
+
+
+                    cleaned = self.orica.transform(chunk[self.channel_range, :])
+                    cleaned_chunk[self.channel_range, :] = cleaned
+                    ica_sources = self.orica.ica.transform(self.orica.data_buffer.T).T  # (components, samples)
+                    eog_indices = self.orica.eog_indices
+                    # 获取mixing matrix A
+                    try:
+                        A = np.linalg.pinv(self.orica.ica.W)
+                    except Exception:
+                        A = None
+                    # 获取所有IC分量的spectrum
+                    if ica_sources is not None:
+                        powers = []
+                        freqs = None
+                        for ic in range(ica_sources.shape[0]):
+                            f, Pxx = welch(ica_sources[ic], fs=self.srate)
+                            if freqs is None:
+                                freqs = f
+                            powers.append(Pxx)
+                        powers = np.array(powers)  # shape: (n_components, n_freqs)
+                        spectrum = {'freqs': freqs, 'powers': powers}
+        return cleaned_chunk, ica_sources, eog_indices, A, spectrum
 
     def pull_and_update_buffer(self):
         samples, timestamps = self.inlet.pull_chunk(timeout=0.0)
         if timestamps:
             chunk = np.array(samples).T  # shape: (channels, samples)
-
-
-            # #step 0: replace woring channels with means
-            # print("before")
-            # print(np.array(chunk).shape)
-            # chunk = clean_bad_channels(chunk, labels=self.chan_labels)
-            # print("after")
-            # print(np.array(chunk).shape)
+            #print("test",chunk.shape) # 
 
             # Step 1: Bandpass or highpass filter
             chunk = EEGSignalProcessor.eeg_filter(chunk, self.srate, cutoff=self.cutoff)
 
-
-
-            # ✅ 更新原始滤波后的 buffer（raw_buffer）
+            # ✅ 更新原始滤波后的数据接口
             self.last_unclean_chunk = chunk.copy()
             if self.raw_buffer is not None:
                 self.raw_buffer = np.roll(self.raw_buffer, -chunk.shape[1], axis=1)
                 self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
 
 
+            #✅ Step X: ORICA 去眼动伪影（重构为独立函数）
+            chunk, ica_sources, eog_indices,A,spectrum = self.process_orica(chunk)
+            if ica_sources is not None:
+                self.latest_sources = ica_sources
+            if eog_indices is not None:
+                self.latest_eog_indices = eog_indices
 
-            #✅ Step X: ORICA 去眼动伪影
-            if self.orica.update_buffer(chunk[self.channel_range, :]):
-                if self.orica.fit(self.orica.data_buffer):
-                    cleaned = self.orica.transform(chunk[self.channel_range, :])
-                    chunk[self.channel_range, :] = cleaned
-
-                    # ✅ 新增：保存当前 ICA sources 用于可视化
-                    self.latest_sources = self.orica.ica.transform(
-                        self.orica.data_buffer.T).T  # (components, samples)
-
-                    # ✅ 可选：也保存 EOG 伪影成分索引
-                    self.latest_eog_indices = self.orica.eog_indices
-
-            #我先设定一个窗口，让chunk填满这个窗口。
-
-            # Step 2
+            # Step 2: ASR处理
             if self.use_asr:
                 chunk = self.apply_pyprep_asr(chunk)
 
@@ -197,91 +295,162 @@ class LSLStreamReceiver:
             num_new = chunk.shape[1]
             self.buffer = np.roll(self.buffer, -num_new, axis=1)
             self.buffer[:, -num_new:] = chunk
-
-            # ✅ Step 4: 回调分析函数，输入是当前最新的 chunk 数据
-            #当执行到这里的时候就会触发回调函数，运行try下面的内容
-            # for fn in self.analysis_callbacks:
-            #     try:
-            #         fn(chunk=self.buffer[self.channel_range, :],  # 清洗后的
-            #            raw=self.raw_buffer[self.channel_range, :],  # 仅 bandpass
-            #            srate=self.srate,
-            #            labels=self.chan_labels)
-            #     except Exception as e:
-            #         print(f"❌ 回调分析函数错误: {e}")
+            
+            # ✅ 更新处理后数据接口
+            self.last_processed_chunk = chunk.copy()
+            self.data_timestamp = time.time()
 
 
+            
+                # 3. 存成一对
+            timestamp = time.time()
+            self.chunk_pairs.append((timestamp, self.last_unclean_chunk, self.last_processed_chunk))
+            # 只保留最近N对
+            if len(self.chunk_pairs) > 1:
+                self.chunk_pairs.pop(0)
 
-            # 在你的 update_plot 或 pull_and_update_buffer 之后：
-            for fn in self.analysis_callbacks:
-                try:
-                    thread = threading.Thread(
-                        target=fn,
-                        kwargs=dict(
-                            chunk=self.buffer[self.channel_range, :],
-                            raw=self.raw_buffer[self.channel_range, :],
-                            srate=self.srate,
-                            labels=self.chan_labels
-                        )
-                    )
-                    thread.start()
-                except Exception as e:
-                    print(f"❌ 回调分析函数错误: {e}")
+            # ✅ Step 4: 回调分析函数
+            # for fn in self.analysis_callbacks: # 移除此行
+            #     try: # 移除此行
+            #         thread = threading.Thread( # 移除此行
+            #             target=fn, # 移除此行
+            #             kwargs=dict( # 移除此行
+            #                 chunk=self.buffer[self.channel_range, :], # 移除此行
+            #                 raw=self.raw_buffer[self.channel_range, :], # 移除此行
+            #                 srate=self.srate, # 移除此行
+            #                 labels=self.chan_labels # 移除此行
+            #             ) # 移除此行
+            #         ) # 移除此行
+            #         thread.start() # 移除此行
+            #     except Exception as e: # 移除此行
+            #         print(f"❌ 回调分析函数错误: {e}") # 移除此行
 
-    # def pull_and_update_buffer(self):
-    #     samples, timestamps = self.inlet.pull_chunk(timeout=0.0)
-    #     if timestamps:
-    #         chunk = np.array(samples).T  # shape: (channels, samples)
-    #
-    #         chunk = EEGSignalProcessor.eeg_filter(chunk, self.srate, cutoff=self.cutoff)
-    #
-    #         with self.lock:
-    #             self.last_unclean_chunk = chunk.copy()
-    #             if self.raw_buffer is not None:
-    #                 self.raw_buffer = np.roll(self.raw_buffer, -chunk.shape[1], axis=1)
-    #                 self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
-    #
-    #             # ORICA 去伪影
-    #             if self.orica.update_buffer(chunk[self.channel_range, :]):
-    #                 if self.orica.fit(self.orica.data_buffer):
-    #                     cleaned = self.orica.transform(chunk[self.channel_range, :])
-    #                     chunk[self.channel_range, :] = cleaned
-    #                     self.latest_sources = self.orica.ica.transform(self.orica.data_buffer.T).T
-    #                     self.latest_eog_indices = self.orica.eog_indices
-    #
-    #             if self.use_asr:
-    #                 chunk = self.apply_pyprep_asr(chunk)
-    #
-    #             num_new = chunk.shape[1]
-    #             self.buffer = np.roll(self.buffer, -num_new, axis=1)
-    #             self.buffer[:, -num_new:] = chunk
-    #
-    #         # 回调函数（异步线程）
-    #         for fn in self.analysis_callbacks:
-    #             try:
-    #                 thread = threading.Thread(
-    #                     target=fn,
-    #                     kwargs=dict(
-    #                         chunk=self.buffer[self.channel_range, :],
-    #                         raw=self.raw_buffer[self.channel_range, :],
-    #                         srate=self.srate,
-    #                         labels=self.chan_labels
-    #                     )
-    #                 )
-    #                 thread.start()
-    #             except Exception as e:
-    #                 print(f"❌ 回调分析函数错误: {e}")
+
+    
+
+
+    #Selected channel indices: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+    #Selected channel labels: ['AF7', 'Fpz', 'F7', 'Fz', 'T7', 'FC6', 'F4', 'C4', 'Oz', 'CP6', 'Cz', 'PO8', 'CP5', 'O2', 'O1', 'P3', 'P4', 'P7', 'P8', 'Pz', 'PO7', 'T8', 'C3', 'Fp2', 'F3', 'F8', 'FC5', 'AF8']
+    #上面就是channel_range和channel_labels的格式，要调用函数就传入这样的list
+    def set_channel_range_and_labels(self, new_range, new_labels):
+        with self.lock:
+            self.channel_range = new_range
+            self.chan_labels = new_labels
+            self.nbchan = len(new_range)
+            self.reinitialize_orica()
+            print(f"🔁 通道更新: {self.chan_labels}")
+
+    def register_analysis_callback(self, callback_fn):
+        """注册一个函数用于处理每次更新后的数据段 chunk"""
+        # self.analysis_callbacks.append(callback_fn) # 移除此行
+        pass # 移除此行
+
+    def reinitialize_orica(self):
+        self.orica = ORICAProcessor(
+            n_components=len(self.channel_range),
+            max_samples=self.srate * 10,
+            srate=self.srate
+        )
+        print("🔁 ORICA processor re-initialized with new channel range.")
+
+    def start(self):
+        """启动数据流和数据更新线程"""
+        if hasattr(self, 'is_running') and self.is_running:
+            print("⚠️ 数据流已在运行")
+            return
+        self.find_and_open_stream()
+        self.is_running = True
+        self.data_update_thread = threading.Thread(target=self._data_update_loop, daemon=True)
+        self.data_update_thread.start()
+        print("✅ 数据流和数据更新线程已启动")
+
+    def stop(self):
+        """停止数据更新线程"""
+        self.is_running = False
+        if hasattr(self, 'data_update_thread') and self.data_update_thread and self.data_update_thread.is_alive():
+            self.data_update_thread.join(timeout=1.0)
+        print("🛑 数据更新线程已停止")
+
+    def _data_update_loop(self):
+        """数据更新循环 - 在独立线程中运行"""
+        while self.is_running:
+            try:
+                self.pull_and_update_buffer()
+                time.sleep(self.update_interval)
+            except Exception as e:
+                print(f"❌ 数据更新错误: {e}")
+                time.sleep(0.1)  # 错误时短暂等待
+
+    # ✅ 新增：数据接口方法
+    def get_raw_data(self):
+        """获取最新的原始数据（仅带通滤波）"""
+        return self.last_unclean_chunk.copy() if self.last_unclean_chunk is not None else None
+    
+    def get_processed_data(self):
+        """获取最新的处理后数据（ORICA + ASR）"""
+        return self.last_processed_chunk.copy() if self.last_processed_chunk is not None else None
+
+    def get_pair_data(self, data_type='processed'):
+        if data_type == 'raw':
+            return self.chunk_pairs.copy()[0][1][self.channel_range, :] if self.chunk_pairs is not None else None
+        else:
+            return self.chunk_pairs.copy()[0][2][self.channel_range, :] if self.chunk_pairs is not None else None
+        #return self.chunk_pairs.copy() if self.chunk_pairs is not None else None
+    
+    def get_buffer_data(self, data_type='processed'):
+        """获取缓冲区数据
+        
+        Args:
+            data_type: 'raw' 或 'processed'
+        """
+        if data_type == 'raw':
+            return self.raw_buffer[self.channel_range, :] if self.raw_buffer is not None else None
+        else:
+            return self.buffer[self.channel_range, :] if self.buffer is not None else None
+    
+    
+    def get_ica_sources(self):
+        """获取最新的ICA源信号"""
+        return self.latest_sources.copy() if self.latest_sources is not None else None
+    
+    def get_eog_indices(self):
+        """获取EOG伪影成分索引"""
+        return self.latest_eog_indices.copy() if self.latest_eog_indices is not None else None
+    
+    def get_channel_info(self):
+        """获取通道信息"""
+        return {
+            'labels': self.chan_labels.copy() if self.chan_labels else [],
+            'indices': self.channel_range.copy() if self.channel_range else [],
+            'count': len(self.channel_range) if self.channel_range else 0,
+            'sampling_rate': self.srate
+        }
+    
+    def is_data_available(self):
+        """检查是否有可用数据"""
+        return (self.last_unclean_chunk is not None and 
+                self.last_processed_chunk is not None and 
+                self.buffer is not None)
+    
+    def get_data_timestamp(self):
+        """获取数据时间戳，用于检测数据更新"""
+        return self.data_timestamp
+
+
+
+
 
     def print_latest_channel_values(self):
         if self.buffer is None:
             print("⚠️ Buffer 尚未初始化，无法打印通道值")
             return
 
-        print("--- EEG Channel Values (Last Sample) ---")
-        for i, ch_idx in enumerate(self.channel_range):
-            label = self.chan_labels[i]
-            last_value = self.buffer[ch_idx, -1]
-            rms = np.sqrt(np.mean(self.buffer[ch_idx] ** 2))
-            print(f"{label:>4}: {last_value:>8.2f} μV | RMS: {rms:.2f}")
+        # print("--- EEG Channel Values (Last Sample) ---")
+        # for i, ch_idx in enumerate(self.channel_range):
+        #     label = self.chan_labels[i]
+        #     last_value = self.buffer[ch_idx, -1]
+        #     rms = np.sqrt(np.mean(self.buffer[ch_idx] ** 2))
+        #     print(f"{label:>4}: {last_value:>8.2f} μV | RMS: {rms:.2f}")
 
 
 
@@ -325,7 +494,7 @@ class LSLStreamReceiver:
                     self.asr_instance = ASR(
                         sfreq=self.srate,
 
-                        cutoff=2,
+                        cutoff=20,
                         win_len=2,
                         win_overlap=0.8,
                         blocksize=self.srate
@@ -363,59 +532,6 @@ class LSLStreamReceiver:
 
         return chunk
 
-    # def apply_pyprep_asr(self, chunk):
-    #     if not self.asr_calibrated:
-    #         if self.asr_calibration_buffer is None:
-    #             self.asr_calibration_buffer = chunk.copy()
-    #         else:
-    #             self.asr_calibration_buffer = np.concatenate((self.asr_calibration_buffer, chunk), axis=1)
-    #
-    #         if self.asr_calibration_buffer.shape[1] >= self.srate * 10:
-    #             try:
-    #                 info = mne.create_info(
-    #                     ch_names=[self.chan_labels[i] for i in range(len(self.channel_range))],
-    #                     sfreq=self.srate,
-    #                     ch_types=["eeg"] * len(self.channel_range)
-    #                 )
-    #                 raw = mne.io.RawArray(self.asr_calibration_buffer[self.channel_range, :], info)
-    #                 raw.set_montage("standard_1020")
-    #
-    #                 prep = PrepPipeline(raw, {
-    #                     "ref_chs": raw.ch_names,
-    #                     "reref_chs": raw.ch_names,
-    #                     "line_freqs": [50]
-    #                 }, montage="standard_1020")
-    #
-    #                 prep.fit()
-    #                 self.prep_reference = prep
-    #                 self.asr_calibrated = True
-    #                 print("✅ pyPREP ASR calibrated.")
-    #                 self.asr_calibration_buffer = None
-    #             except Exception as e:
-    #                 print("❌ ASR calibration failed:", e)
-    #     else:
-    #         try:
-    #             info = mne.create_info(
-    #                 ch_names=[self.chan_labels[i] for i in range(len(self.channel_range))],
-    #                 sfreq=self.srate,
-    #                 ch_types=["eeg"] * len(self.channel_range)
-    #             )
-    #             raw_chunk = mne.io.RawArray(chunk[self.channel_range, :], info)
-    #             raw_chunk.set_montage("standard_1020")
-    #
-    #             prep = PrepPipeline(raw_chunk, {
-    #                 "ref_chs": raw_chunk.ch_names,
-    #                 "reref_chs": raw_chunk.ch_names,
-    #                 "line_freqs": [50]
-    #             }, montage="standard_1020")
-    #
-    #             prep.fit()
-    #             clean_data = prep.raw.get_data()
-    #             chunk[self.channel_range, :] = clean_data
-    #         except Exception as e:
-    #             print("❌ pyPREP ASR cleaning failed:", e)
-    #
-    #     return chunk
 
 
 class ChannelManager:
@@ -475,11 +591,11 @@ class ChannelManager:
 
     def get_labels_excluding_keywords(self, keywords):
         return [ch["label"] for ch in self.channels
-                if not any(kw in ch["label"] for kw in keywords)]
+                if not any(kw == ch["label"] for kw in keywords)]
 
     def get_indices_excluding_keywords(self, keywords):
         return [ch["index"] for ch in self.channels
-                if not any(kw in ch["label"] for kw in keywords)]
+                if not any(kw == ch["label"] for kw in keywords)]
 
     def get_labels_by_indices(self, indices):
         """

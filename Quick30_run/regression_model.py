@@ -27,7 +27,8 @@ class RealTimeRegressor:
         mobility = np.sqrt(np.var(d1, axis=1) / activity)
         complexity = np.sqrt(np.var(d2, axis=1) / np.var(d1, axis=1))
 
-        freqs, psd = welch(chunk, fs=srate, nperseg=srate, axis=1)
+        nperseg = min(srate, chunk.shape[1])
+        freqs, psd = welch(chunk, fs=srate, nperseg=nperseg, axis=1)
         features = list(activity) + list(mobility) + list(complexity)
 
         for fmin, fmax in [(1, 4), (4, 8), (8, 13), (13, 30), (30, 45)]:

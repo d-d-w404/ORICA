@@ -5,7 +5,8 @@ import time
 
 def analyze_bandpower(chunk, raw, srate, labels, gui=None):
     try:
-        freqs, psd = welch(chunk, fs=srate, nperseg=srate, axis=1)
+        nperseg = min(srate, chunk.shape[1])
+        freqs, psd = welch(chunk, fs=srate, nperseg=nperseg, axis=1)
         band_dict = {}
         for band, (fmin, fmax) in {
             'delta': (1, 4),
@@ -53,7 +54,8 @@ def heavy_analysis(chunk, raw, srate, labels):
 
             #print("data.shape =",data.shape)#data.shape = (29, 2500)
             #print(srate)
-            freqs,psd  = welch(data, fs=srate, nperseg=srate, axis=1)
+            nperseg = min(srate, data.shape[1])
+            freqs,psd  = welch(data, fs=srate, nperseg=nperseg, axis=1)
             #print("psd.shape =", psd.shape)  # psd.shape = (29,251)
             #代表了29个通道，在251个频率上的功率密度值
             #后续直接对 psd[:, 8:13] → 求 alpha 波段的能量

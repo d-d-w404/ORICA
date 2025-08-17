@@ -6,6 +6,12 @@ class EEGSignalProcessor:
     @staticmethod
     #先于callback，用于receiver的预处理部分
     def eeg_filter(data, srate, cutoff=0.5, order=2):
+        # 检查数据长度是否足够进行滤波
+        min_length = order * 3  # 滤波器需要的最小数据长度
+        if data.shape[1] <= min_length:
+            print(f"⚠️ 数据长度不足，跳过滤波。数据长度: {data.shape[1]}, 需要: >{min_length}")
+            return data
+            
         nyq = 0.5 * srate
         if isinstance(cutoff, (list, tuple)) and len(cutoff) == 2:
             low, high = cutoff
@@ -58,7 +64,8 @@ class EEGSignalProcessor:
                 return
 
             for data_name, data in zip(['cleaned', 'raw'], [chunk, raw]):
-                freqs, psd = welch(data, fs=srate, nperseg=srate, axis=1)
+                nperseg = min(srate, data.shape[1])
+                freqs, psd = welch(data, fs=srate, nperseg=nperseg, axis=1)
                 for band, (fmin, fmax) in {
                     'delta': (1, 4),
                     'theta': (4, 8),
