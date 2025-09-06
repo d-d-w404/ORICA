@@ -2,7 +2,9 @@ from ORICA import ORICA
 from ORICA_none_rls import ORICAX
 from ORICA1 import ORICA1
 from ORICA_enhanced import ORICAW
-from ORICA_REST import ORICAZ
+#from ORICA_REST import ORICAZ
+from ORICA_REST_new import ORICAZ
+from ORICA_final import ORICA_final
 # from ORICA_old import ORICA
 import numpy as np
 from scipy.signal import welch
@@ -242,6 +244,14 @@ class ORICAProcessor:
         # 只在第一次创建ORICA实例，避免重复初始化
         if self.ica is None:
             print("🔄 首次创建ORICA实例")
+            self.ica = ORICA_final(n_components=min(self.n_components, data.shape[0]))
+            self.ica.initialize(data.T)
+            sources,x,y = self.ica.fit(data.T)
+            print("sources",sources.shape)#(22,5000)
+            print("srate",self.srate)#500
+            #
+
+            '''
             self.ica = ORICAZ(n_components=min(self.n_components, data.shape[0]))
             self.ica.initialize(data.T)  # 只在第一次初始化
             #print("test",data.T.shape)#test (2500, 25)
@@ -250,7 +260,8 @@ class ORICAProcessor:
 
             #sources = np.array([self.ica.partial_fit(x_t) for x_t in data.T]).T
             # 使用fit_online_stream处理整个数据流
-            sources = self.ica.fit_online_stream(data.T)
+            #sources = self.ica.fit_online_stream(data.T)
+            sources = self.ica.fit_block_stream(data.T)
 
 
             # #用于测试rls有无的差别
@@ -267,7 +278,8 @@ class ORICAProcessor:
 
             #sources = np.array([self.ica.partial_fit(x_t) for x_t in data.T]).T#sources (25, 5000)
             # 使用fit_online_stream处理整个数据流
-            sources = self.ica.fit_online_stream(data.T)#sources (5000, 25)
+            #sources = self.ica.fit_online_stream(data.T)#sources (5000, 25)
+            sources = self.ica.fit_block_stream(data.T)
 
             #sourcesx = np.array([self.icax.partial_fit(x_t) for x_t in data.T]).T
             # for x_t in data.T:
@@ -277,7 +289,9 @@ class ORICAProcessor:
         self.evaluate_orica_sources(sources)
         
         #self.evaluate_orica_sources(sourcesx)
-
+        print("sources",sources.shape)
+        print("srate",self.srate)
+        '''
 
         # 获取分离后的源信号
         #sources = self.ica.transform(data.T).T  # shape: (components, samples)
@@ -318,14 +332,14 @@ class ORICAProcessor:
         self.identify_eye_artifacts(sources, self.srate)
         #self.identify_artifacts_by_iclabel(ic_labels, ic_probs, threshold=0.8)
         
-        
+
         # 获取mixing matrix A
         try:
             A = np.linalg.pinv(self.ica.W)
         except Exception:
             A = None
 
-        
+
         # 获取所有IC分量的spectrum
         spectrum = None
         if sources is not None and self.srate is not None:
@@ -339,6 +353,7 @@ class ORICAProcessor:
             powers = np.array(powers)  # shape: (n_components, n_freqs)
             spectrum = {'freqs': freqs, 'powers': powers}
 
+        print("2")
         # --- IC能量排序 ---
         if sources is not None:
             # 计算每个IC的低频占比
@@ -358,9 +373,12 @@ class ORICAProcessor:
             if A is not None:
                 A = A[:, self.sorted_idx]
             # 对W排序并保存
+            print("1")
             if hasattr(self.ica, 'get_W'):
                 W = self.ica.get_W()
                 self.sorted_W = W[self.sorted_idx, :]
+
+
 
         return sources, A, spectrum
 
@@ -465,15 +483,23 @@ class ORICAProcessor:
 
     def identify_eye_artifacts(self, components, srate):
 
+
         self.eog_indices = []
+
 
         for i, comp in enumerate(components):
 
             fft_vals = np.abs(np.fft.rfft(comp))
+
             freqs = np.fft.rfftfreq(comp.shape[0], 1 / srate)
+            print("fft_vals",fft_vals.shape)
+            print("freqs",freqs.shape)
             low_freq_power = np.sum(fft_vals[(freqs >= 0.1) & (freqs <= 4)])#0.1-4hz的低频信号
+
             total_power = np.sum(fft_vals)
+
             ratio = low_freq_power / (total_power + 1e-10)
+
 
 
             if ratio > 0.3:  # 如果低频占比超过阈值，认为是 EOG
@@ -511,10 +537,12 @@ class ORICAProcessor:
         if self.ica is None:
             return new_data
 
+        print("x")
         sources = self.ica.transform(new_data.T)
         sources[:, self.eog_indices] = 0  # Zero out EOG components
         #sources[:, self.eog_indices] = 0  # Zero out EOG components
         cleaned = self.ica.inverse_transform(sources)
+        print("y")
         return cleaned.T
 
     def update_buffer(self, new_chunk):

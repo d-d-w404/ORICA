@@ -225,7 +225,8 @@ class ORICAZ:
         
         try:
             # 去均值
-            X_init = self._center(X_init)
+            #X_init = self._center(X_init)
+            #似乎np.cov自带中心化
             
             # 白化
             if self.use_rls_whitening:
@@ -308,7 +309,111 @@ class ORICAZ:
             print(f"⚠️ partial_fit失败: {e}")
             return x_t.ravel() if hasattr(x_t, 'ravel') else x_t
 
+    def partial_fit_new(self, x_t):
+        """
+        块样本在线更新 - 能够处理指定长度的块数据
+        
+        Args:
+            x_t: 块数据 (n_channels, block_size) 或 (n_channels,)
+        """
+        try:
+            # 检查输入形状
+            if x_t.ndim == 1:
+                # 如果是单个样本，转换为 (n_channels, 1)
+                x_t = x_t.reshape(-1, 1)
+                block_size = 1
+            elif x_t.ndim == 2:
+                # 如果是块数据 (n_channels, block_size)
+                if x_t.shape[0] != x_t.shape[1]:  # 确保是 (n_channels, block_size) 格式
+                    if x_t.shape[1] < x_t.shape[0]:  # 如果第二个维度更小，转置
+                        x_t = x_t.T
+                block_size = x_t.shape[1]
+            else:
+                raise ValueError(f"输入数据维度错误: {x_t.shape}，期望 (n_channels,) 或 (n_channels, block_size)")
+            
+            if not self.whitened:
+                raise ValueError("Must call `initialize` with initial batch before `partial_fit_new`.")
+            
+            # 检查输入维度是否与当前模型匹配
+            if x_t.shape[0] != self.n_components:
+                print(f"⚠️ partial_fit_new维度不匹配: 期望{self.n_components}通道，实际{x_t.shape[0]}通道")
+                # 重新初始化以匹配新的维度
+                self.n_components = x_t.shape[0]
+                self.W = np.eye(self.n_components)
+                # 重新初始化白化
+                if self.use_rls_whitening:
+                    self.C = np.eye(self.n_components)
+                    self.whitening_matrix = np.eye(self.n_components)
+                    self.t = 0
+                else:
+                    self.whitening_matrix = np.eye(self.n_components)
+                # 重新计算均值
+                self.mean = np.zeros(self.n_components)
+                print(f"✅ 重新初始化ORICA，新维度: {self.n_components}")
+            
+            # 去均值 - 对块数据同时处理
+            if self.mean is not None and self.mean.shape[0] == x_t.shape[0]:
+                x_t = x_t - self.mean.reshape(-1, 1)
+            else:
+                # 如果mean维度不匹配，重新计算
+                print(f"⚠️ 均值维度不匹配，重新计算")
+                self.mean = np.zeros(x_t.shape[0])
+                # 确保n_components也匹配
+                if self.n_components != x_t.shape[0]:
+                    self.n_components = x_t.shape[0]
+                    self.W = np.eye(self.n_components)
+                    if self.use_rls_whitening:
+                        self.C = np.eye(self.n_components)
+                        self.whitening_matrix = np.eye(self.n_components)
+                        self.t = 0
+                    else:
+                        self.whitening_matrix = np.eye(self.n_components)
+            
+            # 白化 - 对块数据同时处理
+            if self.use_rls_whitening:
+                # RLS白化更新 - 对每个样本分别更新
+                x_t_whitened = np.zeros_like(x_t)
+                for i in range(block_size):
+                    x_t_whitened[:, i:i+1] = self._rls_whiten_update(x_t[:, i:i+1])
+            else:
+                # 传统白化 - 对块数据同时处理
+                x_t_whitened = self.whitening_matrix @ x_t
+            
+            # ICA更新 - 对块数据同时处理
+            y_t = self.W @ x_t_whitened  # shape: (n_components, block_size)
+            
+            # 计算非线性函数 - 对块数据同时处理
+            g_y = np.zeros_like(y_t)
+            g_prime = np.zeros_like(y_t)
+            
+            for i in range(block_size):
+                g_y[:, i:i+1], g_prime[:, i:i+1] = self._g(y_t[:, i:i+1])
+            
+            # ORICA更新规则 - 使用块数据的累积更新
+            I = np.eye(self.n_components)
+            
+            # 计算块数据的累积更新
+            delta_W_total = np.zeros_like(self.W)
+            for i in range(block_size):
+                y_i = y_t[:, i:i+1]
+                g_y_i = g_y[:, i:i+1]
+                delta_W = self.learning_rate * ((I - g_y_i @ y_i.T) @ self.W)
+                delta_W_total += delta_W
+            
+            # 应用累积更新
+            self.W += delta_W_total / block_size  # 平均更新
+            
+            # 正交化
+            self.update_count += block_size  # 更新计数增加block_size
+            if self.update_count % self.ortho_every == 0:
+                U, _, Vt = np.linalg.svd(self.W)
+                self.W = U @ Vt
 
+            return y_t  # 返回整个块的结果 (n_components, block_size)
+            
+        except Exception as e:
+            print(f"⚠️ partial_fit_new失败: {e}")
+            return x_t
 
     def fit_online_stream(self, data_stream, block_size=None):
         """
@@ -340,19 +445,53 @@ class ORICAZ:
                     print("⚠️ 初始化数据不足，返回原始数据")
                     return data_stream
             
-            # 使用逐样本的方式处理数据流，就像partial_fit一样
+            # 使用块处理的方式处理数据流
             sources = []
 
-            for i in range(data_stream.shape[0]):
-                x_t = data_stream[i, :]  # 获取单个样本 (n_channels,)
-                y_t = self.partial_fit(x_t)  # 进行在线学习并返回源信号
-                sources.append(y_t)
+            # for i in range(data_stream.shape[0]):
+            #     x_t = data_stream[i, :]  # 获取单个样本 (n_channels,)
+            #     y_t = self.partial_fit(x_t)  # 进行在线学习并返回源信号
+            #     sources.append(y_t)
+
+            # # 转换为numpy数组并转置以匹配期望的输出格式
+            # sources = np.array(sources)  # shape: (samples, components)
+            # # 转置以匹配partial_fit方式的输出格式: (components, samples)
+            # sources = sources.T  # shape: (components, samples)
+            # return sources
+
+            # 按块大小处理数据
+            n_samples = data_stream.shape[0]
+            for i in range(0, n_samples, block_size):
+                # 获取当前块的数据
+                end_idx = min(i + block_size, n_samples)
+                current_block = data_stream[i:end_idx, :]  # (current_block_size, channels)
+                
+                # 转置为 (channels, current_block_size) 格式
+                current_block_transposed = current_block.T
+                
+                # 使用 partial_fit_new 进行块处理
+                y_t = self.partial_fit_new(current_block_transposed)
+                
+                # 将结果添加到sources中
+                if y_t.ndim == 2:
+                    # 如果返回的是块结果 (channels, current_block_size)
+                    sources.append(y_t.T)  # 转置为 (current_block_size, channels)
+                else:
+                    # 如果返回的是单个结果，转换为 (1, channels)
+                    sources.append(y_t.reshape(1, -1))
             
-            # 转换为numpy数组并转置以匹配期望的输出格式
-            sources = np.array(sources)  # shape: (samples, components)
-            # 转置以匹配partial_fit方式的输出格式: (components, samples)
-            sources = sources.T  # shape: (components, samples)
-            return sources
+            # 合并所有结果
+            if sources:
+                sources = np.vstack(sources)  # shape: (total_samples, components)
+                # 转置以匹配期望的输出格式: (components, total_samples)
+                sources = sources.T
+                return sources
+            else:
+                return data_stream
+
+            
+            
+
                 
         except Exception as e:
             print(f"⚠️ fit_online_stream失败: {e}")
@@ -583,3 +722,42 @@ class ORICAZ:
             print(f"完成。耗时: {elapsed_time:.2f} 秒")
         
         return self.W, self.whitening_matrix
+
+# 使用示例和说明
+"""
+使用 partial_fit_new() 的示例：
+
+# 1. 创建ORICA实例
+orica = ORICAZ(n_components=25, block_size_ica=8)
+
+# 2. 初始化
+init_data = np.random.randn(16, 25)  # (samples, channels)
+orica.initialize(init_data)
+
+# 3. 使用 partial_fit_new 处理块数据
+# 方式1: 处理单个样本 (25,)
+single_sample = np.random.randn(25)
+result_single = orica.partial_fit_new(single_sample)  # 返回 (25, 1)
+
+# 方式2: 处理块数据 (25, 8)
+block_data = np.random.randn(25, 8)  # 8个样本，每个25个通道
+result_block = orica.partial_fit_new(block_data)  # 返回 (25, 8)
+
+# 方式3: 处理转置的块数据 (8, 25) - 会自动转置为 (25, 8)
+block_data_transposed = np.random.randn(8, 25)  # 8个样本，每个25个通道
+result_block_transposed = orica.partial_fit_new(block_data_transposed)  # 返回 (25, 8)
+
+# 4. 在线流处理示例
+def process_stream_with_blocks(data_stream, block_size=8):
+    results = []
+    for i in range(0, len(data_stream), block_size):
+        block = data_stream[i:i+block_size, :].T  # 转置为 (channels, block_size)
+        result = orica.partial_fit_new(block)
+        results.append(result)
+    return np.hstack(results)  # 合并所有结果
+
+# 5. 与原有 partial_fit 的区别
+# - partial_fit: 每次处理1个样本，返回 (n_components,)
+# - partial_fit_new: 可以处理块数据，返回 (n_components, block_size)
+# - partial_fit_new 在内部对块数据进行批量处理，提高效率
+"""

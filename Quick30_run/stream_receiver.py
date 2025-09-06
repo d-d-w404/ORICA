@@ -35,6 +35,9 @@ class LSLStreamReceiver:
         # ✅ 移除callback机制，改为纯数据接口模式
         # self.analysis_callbacks = []  # 存放所有回调分析函数
 
+        # ✅ 新增：CAR设置
+        self.use_car = False  # 是否启用CAR
+
         #ORICA
         self.orica = None
         self.latest_sources = None
@@ -144,51 +147,51 @@ class LSLStreamReceiver:
 #     'ExG 2'     # 31
 # ]
 
-        exclude = [
-            'AF7',      # 0
-            'Fpz',      # 1
-            'F7',       # 2
-            #'Fz',       # 3
-            #'T7',       # 4
-            'FC6',      # 5
-            'Fp1',      # 6
-            #'F4',       # 7
-            'C4',       # 8
-            'Oz',       # 9
-            'CP6',      # 10
-            'Cz',       # 11
-            'PO8',      # 12
-            'CP5',      # 13
-            #'O2',       # 14
-            #'O1',       # 15
-            'P3',       # 16
-            'P4',       # 17
-            'P7',       # 18
-            'P8',       # 19
-            #'Pz',       # 20
-            'PO7',      # 21
-            #'T8',       # 22
-            'C3',       # 23
-            'Fp2',      # 24
-            #'F3',       # 25
-            'F8',       # 26
-            'FC5',      # 27
-            'AF8',      # 28
-            'A2',       # 29
-            'ExG 1',    # 30
-            'ExG 2'     # 31
-            'TRIGGER',
-            'ACC34',
-            'ACC33',
-            'ACC32',
-            'Packet Counter',
-            'ACC',
-        ]
+        # exclude = [
+        #     'AF7',      # 0
+        #     'Fpz',      # 1
+        #     'F7',       # 2
+        #     #'Fz',       # 3
+        #     #'T7',       # 4
+        #     'FC6',      # 5
+        #     'Fp1',      # 6
+        #     #'F4',       # 7
+        #     'C4',       # 8
+        #     'Oz',       # 9
+        #     'CP6',      # 10
+        #     'Cz',       # 11
+        #     'PO8',      # 12
+        #     'CP5',      # 13
+        #     #'O2',       # 14
+        #     #'O1',       # 15
+        #     'P3',       # 16
+        #     'P4',       # 17
+        #     'P7',       # 18
+        #     'P8',       # 19
+        #     #'Pz',       # 20
+        #     'PO7',      # 21
+        #     #'T8',       # 22
+        #     'C3',       # 23
+        #     'Fp2',      # 24
+        #     #'F3',       # 25
+        #     'F8',       # 26
+        #     'FC5',      # 27
+        #     'AF8',      # 28
+        #     'A2',       # 29
+        #     'ExG 1',    # 30
+        #     'ExG 2'     # 31
+        #     'TRIGGER',
+        #     'ACC34',
+        #     'ACC33',
+        #     'ACC32',
+        #     'Packet Counter',
+        #     'ACC',
+        # ]
         
         #前额的5个通道
         #exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC','A2','Oz','P3','F8','PO8','F7','Fz', 'T7', 'FC6', 'F4', 'C4', 'CP6', 'Cz', 'CP5', 'O2', 'O1', 'P4', 'P7', 'P8', 'Pz', 'PO7', 'T8', 'C3', 'F3', 'FC5']
 
-        #exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC','A2','Oz','P3','F8','PO8','F7']
+        exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC','A2','Oz','P3','F8','PO8','F7']
         self.chan_labels = self.channel_manager.get_labels_excluding_keywords(exclude)
         self.channel_range = self.channel_manager.get_indices_excluding_keywords(exclude)
 
@@ -246,6 +249,7 @@ class LSLStreamReceiver:
                     cleaned_chunk[self.channel_range, :] = cleaned
                     ica_sources = self.orica.ica.transform(self.orica.data_buffer.T).T  # (components, samples)
                     eog_indices = self.orica.eog_indices
+                    print("cat")
                     # 获取mixing matrix A
                     try:
                         A = np.linalg.pinv(self.orica.ica.W)
@@ -262,6 +266,7 @@ class LSLStreamReceiver:
                             powers.append(Pxx)
                         powers = np.array(powers)  # shape: (n_components, n_freqs)
                         spectrum = {'freqs': freqs, 'powers': powers}
+                    print("dogs")
         return cleaned_chunk, ica_sources, eog_indices, A, spectrum
 
     def pull_and_update_buffer(self):
@@ -278,6 +283,11 @@ class LSLStreamReceiver:
             if self.raw_buffer is not None:
                 self.raw_buffer = np.roll(self.raw_buffer, -chunk.shape[1], axis=1)
                 self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
+
+
+            # # ✅ 新增：CAR处理
+            # if self.use_car:  # 需要添加这个标志
+            #     chunk = self.apply_car(chunk)
 
 
             #✅ Step X: ORICA 去眼动伪影（重构为独立函数）
@@ -454,6 +464,30 @@ class LSLStreamReceiver:
 
 
 
+
+    def apply_car(self, chunk):
+        """使用MNE包实现CAR"""
+        try:
+            # 创建临时的MNE Raw对象
+            info = mne.create_info(
+                ch_names=self.channel_manager.get_labels_by_indices(self.channel_range),
+                sfreq=self.srate,
+                ch_types=["eeg"] * len(self.channel_range)
+            )
+            
+            raw = mne.io.RawArray(chunk[self.channel_range, :], info)      
+            # 应用CAR
+            raw.set_eeg_reference('average')
+            
+            # 获取处理后的数据
+            chunk[self.channel_range, :] = raw.get_data()
+            
+            return chunk
+        
+        except Exception as e:
+            print(f"⚠️ MNE CAR处理失败，使用简单实现: {e}")
+            return self.apply_car(chunk)  # 回退到简单实现
+
     def apply_pyprep_asr(self, chunk):
         try:
             if not self.asr_calibrated:
@@ -568,6 +602,7 @@ class ChannelManager:
                 "type": ch_type,
                 "unit": unit
             })
+            print(self.channels)
 
             ch = ch.next_sibling()
             index += 1
@@ -591,11 +626,11 @@ class ChannelManager:
 
     def get_labels_excluding_keywords(self, keywords):
         return [ch["label"] for ch in self.channels
-                if not any(kw == ch["label"] for kw in keywords)]
+                if not any(kw in ch["label"] for kw in keywords)]
 
     def get_indices_excluding_keywords(self, keywords):
         return [ch["index"] for ch in self.channels
-                if not any(kw == ch["label"] for kw in keywords)]
+                if not any(kw in ch["label"] for kw in keywords)]
 
     def get_labels_by_indices(self, indices):
         """

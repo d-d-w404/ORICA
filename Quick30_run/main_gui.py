@@ -74,6 +74,10 @@ class EEGGUI(QWidget):
         self.asr_checkbox = QCheckBox("Enable ASR (pyPREP)")
         main_layout.addWidget(self.asr_checkbox)
 
+        # ✅ 新增：CAR复选框
+        self.car_checkbox = QCheckBox("Enable CAR (Common Average Reference)")
+        main_layout.addWidget(self.car_checkbox)
+
         # attention display
         self.att_label = QLabel("attention_level")
         self.att_circle = QLabel()
@@ -230,6 +234,11 @@ class EEGGUI(QWidget):
         if hasattr(self, 'asr_checkbox'):
             self.receiver.use_asr = self.asr_checkbox.isChecked()
             print(f"{'✅ 启用' if self.receiver.use_asr else '❌ 关闭'} ASR 处理")
+  
+        # ✅ 新增：设置是否启用 CAR
+        if hasattr(self, 'car_checkbox'):
+            self.receiver.use_car = self.car_checkbox.isChecked()
+            print(f"{'✅ 启用' if self.receiver.use_car else '❌ 关闭'} CAR 处理")
 
     def update_prediction_display(self, pred):
         self.pred_label.setText(f"🎯 预测情绪强度: {pred:.3f}")
