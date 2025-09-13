@@ -5,13 +5,13 @@ import os
 
 # MATLAB_FILE = r"D:\work\matlab_project\orica-master\orica-master\2.txt"
 # PYTHON_FILE = r"D:\work\matlab_project\orica-master\orica-master\2x.txt"
-# PYTHON_FILE = r"D:\work\Python_Project\ORICA\temp_txt\4.txt"
-# MATLAB_FILE= r"D:\work\Python_Project\ORICA\temp_txt\41.txt"
+# PYTHON_FILE = r"D:\work\Python_Project\ORICA\temp_txt\44_11.txt"
+# MATLAB_FILE= r"D:\work\Python_Project\ORICA\temp_txt\44_9.txt"
 
 
 
 
-file_name = "44_final"  # 改这里就行，例如 "1" / "26" / "2025-08-30"
+file_name = "44_9"  # 改这里就行，例如 "1" / "26" / "2025-08-30"
 MATLAB_DIR = r"D:\work\matlab_project\orica-master\orica-master"
 PYTHON_DIR = r"D:\work\Python_Project\ORICA\temp_txt"
 

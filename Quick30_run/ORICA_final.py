@@ -81,6 +81,9 @@ class ORICA_final:
             
         self.verbose = verbose
 
+        self.record=None
+
+
 
     def initialize(self, X_init):
         """初始化ORICA"""
@@ -332,6 +335,7 @@ class ORICA_final:
             # variance = blockdata .* blockdata
             variance = blockdata * blockdata   # element-wise square
             
+            state['Rn']=self.Rn
             if state.get("Rn") is None:
                 state["Rn"] = modelFitness
                 #print("state['Rn']",state["Rn"])
@@ -590,13 +594,32 @@ class ORICA_final:
         """
         nChs, nPts = data.shape
         
-        # 初始化状态
-        state = {
-            'icasphere': np.eye(nChs),  # 初始白化矩阵为单位矩阵
-            'icaweights': np.eye(nChs),  # 初始ICA权重矩阵
-            'counter': 0
-        }
+        # # # 初始化状态
+        # state = {
+        #     'icasphere': np.eye(nChs),  # 初始白化矩阵为单位矩阵
+        #     'icaweights': np.eye(nChs),  # 初始ICA权重矩阵
+        #     'counter': 0
+        # }
 
+        #使用当前权重初始化状态，如果为None则使用单位矩阵
+        if self.whitening_matrix is not None and self.W is not None:
+            state = {
+                'icasphere': self.whitening_matrix,  # 使用当前白化矩阵
+                'icaweights': self.W,  # 使用当前解混矩阵
+                'counter': self.counter
+            }
+            #print("🔄 使用当前权重矩阵初始化状态")
+        else:
+            state = {
+                'icasphere': np.eye(nChs),  # 初始白化矩阵为单位矩阵
+                'icaweights': np.eye(nChs),  # 初始ICA权重矩阵
+                'counter': 0
+            }
+            print("🔄 使用默认单位矩阵初始化状态")
+
+        # print("xxxxxxxx")
+        # print(np.array_equal(self.record, state['icaweights']))
+        # print("xxxxxxxx")
         # save_txt("13.txt", data)
         # 预白化整个数据集
         data = state['icasphere'] @ data  # 对应MATLAB: data = state.icasphere * data;
@@ -694,7 +717,15 @@ class ORICA_final:
         if verbose:
             elapsed_time = time.time() - start_time
 
-        
+        self.record=state['icaweights']
+        self.counter=state['counter']
+        # print('self.counter',self.counter)
+        # print('state[counter]',state['counter'])
+
+        self.Rn=state['Rn']
+        #print('self.Rn',self.Rn)
+
+
         return state['icaweights'], state['icasphere']
 
 
@@ -742,6 +773,7 @@ class ORICA_final:
         self.whitening_matrix = sphere
         
         self.W = weights
+
 
 
 

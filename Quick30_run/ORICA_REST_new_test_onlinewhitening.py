@@ -198,7 +198,7 @@ def gen_cooling_ff(t, gamma, lambda_0):
     # 用法
     #lambda_ = lambda_0 / np.power(t, gamma)
     lambda_values = snap_to_kbits(lambda_values, k=50)
-
+ 
 
     save_txt("27.txt",lambda_values.reshape(1, -1))
     return lambda_values
@@ -207,7 +207,13 @@ def gen_cooling_ff(t, gamma, lambda_0):
 
 
 def snap_to_kbits(x, k=50):  # k < 52
-    k=20
+    k=16
+    """
+    With k = 14 in our mantissa snapping (keeping 14 binary fractional bits), 
+    the relative quantization step is approximately 
+    2^-14≈6.1*10^-5 (≈0.006%). Under this setting, we observe stable, 
+    consistent results across platforms.
+    """
     x = np.asarray(x, dtype=np.float64)
     m, e = np.frexp(x)                     # x = m * 2**e，m∈[-1, -0.5)∪[0.5, 1)
     m = np.round(m * (1 << k)) / float(1 << k)  # 只保留 k 位尾数（纯2的幂，二进制精确）
@@ -876,7 +882,7 @@ if __name__ == "__main__":
 
     print(sfreq, n_channels, n_times, X.shape)
 
-    n = 20
+    n = 10
     #X = X * 1e6   # 转换成 µV
     for ch_idx, ch_name in enumerate(raw.info["ch_names"]):
         print(f"{ch_name:>8}: " + " ".join(f"{v:8.4f}" for v in X[ch_idx, :n]))
@@ -1015,3 +1021,7 @@ if __name__ == "__main__":
 源信号数据 (完整23041个样本):
 源\样本	  1	  2	  3	  4	  5	  
 """
+
+
+
+#这个是orica算法的最终版本

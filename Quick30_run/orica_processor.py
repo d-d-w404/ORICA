@@ -218,7 +218,7 @@ class ORICAProcessor:
         """
 
         assert data.shape[0] == self.n_components, f"Expected {self.n_components} channels, got {data.shape[0]}"
-
+        #print("data.shape[1]",data.shape[1])
         if data.shape[1] < self.max_samples:
             return None, None, None  # Not enough data yet
 
@@ -247,11 +247,20 @@ class ORICAProcessor:
             self.ica = ORICA_final(n_components=min(self.n_components, data.shape[0]))
             self.ica.initialize(data.T)
             sources,x,y = self.ica.fit(data.T)
-            print("sources",sources.shape)#(22,5000)
-            print("srate",self.srate)#500
+            # print("sources1",sources.shape)#(22,5000)
+            # print("srate1",self.srate)#500
             #
+        else:
+            sources,x,y = self.ica.fit(data.T)
+            # print("sources",sources.shape)#(22,5000)
+            # print("srate",self.srate)#500
 
-            '''
+        self.evaluate_orica_sources(sources)
+
+
+
+        
+        '''
             self.ica = ORICAZ(n_components=min(self.n_components, data.shape[0]))
             self.ica.initialize(data.T)  # 只在第一次初始化
             #print("test",data.T.shape)#test (2500, 25)
@@ -286,7 +295,7 @@ class ORICAProcessor:
             #     self.ica.partial_fit(x_t)
         # print("-"*50)
         #print("sources",sources.shape)
-        self.evaluate_orica_sources(sources)
+        #self.evaluate_orica_sources(sources)
         
         #self.evaluate_orica_sources(sourcesx)
         print("sources",sources.shape)
@@ -353,7 +362,7 @@ class ORICAProcessor:
             powers = np.array(powers)  # shape: (n_components, n_freqs)
             spectrum = {'freqs': freqs, 'powers': powers}
 
-        print("2")
+        #print("2")
         # --- IC能量排序 ---
         if sources is not None:
             # 计算每个IC的低频占比
@@ -373,7 +382,7 @@ class ORICAProcessor:
             if A is not None:
                 A = A[:, self.sorted_idx]
             # 对W排序并保存
-            print("1")
+            #print("1")
             if hasattr(self.ica, 'get_W'):
                 W = self.ica.get_W()
                 self.sorted_W = W[self.sorted_idx, :]
@@ -492,8 +501,8 @@ class ORICAProcessor:
             fft_vals = np.abs(np.fft.rfft(comp))
 
             freqs = np.fft.rfftfreq(comp.shape[0], 1 / srate)
-            print("fft_vals",fft_vals.shape)
-            print("freqs",freqs.shape)
+            #print("fft_vals",fft_vals.shape)
+            #print("freqs",freqs.shape)
             low_freq_power = np.sum(fft_vals[(freqs >= 0.1) & (freqs <= 4)])#0.1-4hz的低频信号
 
             total_power = np.sum(fft_vals)
@@ -502,7 +511,7 @@ class ORICAProcessor:
 
 
 
-            if ratio > 0.3:  # 如果低频占比超过阈值，认为是 EOG
+            if ratio > 0.35:  # 如果低频占比超过阈值，认为是 EOG
                 self.eog_indices.append(i)
         #print(self.eog_indices)
 
@@ -537,12 +546,12 @@ class ORICAProcessor:
         if self.ica is None:
             return new_data
 
-        print("x")
+        #print("x")
         sources = self.ica.transform(new_data.T)
         sources[:, self.eog_indices] = 0  # Zero out EOG components
         #sources[:, self.eog_indices] = 0  # Zero out EOG components
         cleaned = self.ica.inverse_transform(sources)
-        print("y")
+        #print("y")
         return cleaned.T
 
     def update_buffer(self, new_chunk):
@@ -558,4 +567,7 @@ class ORICAProcessor:
         #print(np.array(self.data_buffer).shape)
 
         return self.data_buffer.shape[1] >= self.max_samples
-        
+        #这一行就是为啥orica需要等一段时间，因为我需要等到足够数据后，才能
+        #在stream_receiver.py,
+        #if self.orica.update_buffer(chunk[self.channel_range, :]):
+        #这句话判断为true

@@ -11,13 +11,16 @@ import mne
 from scipy.signal import medfilt
 
 class LSLStreamReceiver:
-    def __init__(self, stream_type='EEG', time_range=5):
+    def __init__(self, stream_type='EEG', time_range=10):
         self.stream_type = stream_type
         self.time_range = time_range
         self.inlet = None
         self.srate = None
         self.nbchan = None
-        self.buffer = None
+        self.fixed_chunk_len = None  # 你想要的固定样本数
+        self._stash = None
+
+        self.buffer = None#这个buffer暂时只有view里面使用用来绘图
         self.chan_labels = []
         self.channel_range = []
 
@@ -31,6 +34,10 @@ class LSLStreamReceiver:
         self.prep_reference = None
 
         self.raw_buffer = None  # 存放未 ASR 的 bandpass-only 历史数据
+        self.buffer_real = None
+
+
+        self.pair_buffer = None
 
         # ✅ 移除callback机制，改为纯数据接口模式
         # self.analysis_callbacks = []  # 存放所有回调分析函数
@@ -60,6 +67,7 @@ class LSLStreamReceiver:
         #用于画图时，保证处理后的数据和处理前的能够在时间上吻合
         self.chunk_pairs = []  # [(timestamp, unclean, processed)]
 
+
     def find_and_open_stream(self):
 
         #check the whole stream
@@ -73,7 +81,7 @@ class LSLStreamReceiver:
         print(f"Searching for LSL stream with type = '{self.stream_type}'...")
         #streams = resolve_byprop('type', self.stream_type, timeout=5)
 
-        #暂时使用name筛选stream
+        # #暂时使用name筛选stream
         stream_name = 'mybrain'
         streams = resolve_byprop('name', stream_name, timeout=5)
 
@@ -110,83 +118,6 @@ class LSLStreamReceiver:
         #         self.chan_labels.append(label)
         #         self.channel_range.append(i)
 
-
-        # 或者自定义排除某些关键词
-#         channel_all = [
-#     'AF7',      # 0
-#     'Fpz',      # 1
-#     'F7',       # 2
-#     'Fz',       # 3
-#     'T7',       # 4
-#     'FC6',      # 5
-#     'Fp1',      # 6
-#     'F4',       # 7
-#     'C4',       # 8
-#     'Oz',       # 9
-#     'CP6',      # 10
-#     'Cz',       # 11
-#     'PO8',      # 12
-#     'CP5',      # 13
-#     'O2',       # 14
-#     'O1',       # 15
-#     'P3',       # 16
-#     'P4',       # 17
-#     'P7',       # 18
-#     'P8',       # 19
-#     'Pz',       # 20
-#     'PO7',      # 21
-#     'T8',       # 22
-#     'C3',       # 23
-#     'Fp2',      # 24
-#     'F3',       # 25
-#     'F8',       # 26
-#     'FC5',      # 27
-#     'AF8',      # 28
-#     'A2',       # 29
-#     'ExG 1',    # 30
-#     'ExG 2'     # 31
-# ]
-
-        # exclude = [
-        #     'AF7',      # 0
-        #     'Fpz',      # 1
-        #     'F7',       # 2
-        #     #'Fz',       # 3
-        #     #'T7',       # 4
-        #     'FC6',      # 5
-        #     'Fp1',      # 6
-        #     #'F4',       # 7
-        #     'C4',       # 8
-        #     'Oz',       # 9
-        #     'CP6',      # 10
-        #     'Cz',       # 11
-        #     'PO8',      # 12
-        #     'CP5',      # 13
-        #     #'O2',       # 14
-        #     #'O1',       # 15
-        #     'P3',       # 16
-        #     'P4',       # 17
-        #     'P7',       # 18
-        #     'P8',       # 19
-        #     #'Pz',       # 20
-        #     'PO7',      # 21
-        #     #'T8',       # 22
-        #     'C3',       # 23
-        #     'Fp2',      # 24
-        #     #'F3',       # 25
-        #     'F8',       # 26
-        #     'FC5',      # 27
-        #     'AF8',      # 28
-        #     'A2',       # 29
-        #     'ExG 1',    # 30
-        #     'ExG 2'     # 31
-        #     'TRIGGER',
-        #     'ACC34',
-        #     'ACC33',
-        #     'ACC32',
-        #     'Packet Counter',
-        #     'ACC',
-        # ]
         
         #前额的5个通道
         #exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC','A2','Oz','P3','F8','PO8','F7','Fz', 'T7', 'FC6', 'F4', 'C4', 'CP6', 'Cz', 'CP5', 'O2', 'O1', 'P4', 'P7', 'P8', 'Pz', 'PO7', 'T8', 'C3', 'F3', 'FC5']
@@ -201,10 +132,15 @@ class LSLStreamReceiver:
         #假如我在上面的exclude中去掉了O2,那么O2这个label以及他的序号都会被删除。
 
         self.nbchan = len(self.channel_range)
+
+        self._stash = np.empty((info.channel_count(), 0))
+        self.fixed_chunk_len = 100  # 你想要的固定 chunk 长度
+
         self.buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
 
         #for the comparing stream
         self.raw_buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
+        self.buffer_real = np.zeros((info.channel_count(), self.srate * self.time_range))
 
         print(f"Stream opened: {info.channel_count()} channels at {self.srate} Hz")
         print(f"Using {self.nbchan} EEG channels: {self.chan_labels}")
@@ -237,6 +173,7 @@ class LSLStreamReceiver:
         # ORICA处理
         if self.orica is not None:
             if self.orica.update_buffer(chunk[self.channel_range, :]):
+            #这一句话实际上就，这个updata_buffer就保证了一个稳定长度的buffer用于orica的处理，虽然chunk大小不一，但是没有关系
                 if self.orica.fit(self.orica.data_buffer, self.channel_range, self.chan_labels, self.srate):
                     #classify
                     # ic_probs, ic_labels = self.orica.classify(chunk[self.channel_range, :],self.chan_labels, self.srate)
@@ -249,7 +186,7 @@ class LSLStreamReceiver:
                     cleaned_chunk[self.channel_range, :] = cleaned
                     ica_sources = self.orica.ica.transform(self.orica.data_buffer.T).T  # (components, samples)
                     eog_indices = self.orica.eog_indices
-                    print("cat")
+                    
                     # 获取mixing matrix A
                     try:
                         A = np.linalg.pinv(self.orica.ica.W)
@@ -266,13 +203,113 @@ class LSLStreamReceiver:
                             powers.append(Pxx)
                         powers = np.array(powers)  # shape: (n_components, n_freqs)
                         spectrum = {'freqs': freqs, 'powers': powers}
-                    print("dogs")
+                    
         return cleaned_chunk, ica_sources, eog_indices, A, spectrum
 
     def pull_and_update_buffer(self):
+        # 目标长度
+        # target = self.fixed_chunk_len
+
+        # # 拉取尽量接近目标长度的一次数据
+        # samples, timestamps = self.inlet.pull_chunk(max_samples=target, timeout=0.0)
+        # if timestamps:
+        #     new = np.asarray(samples, dtype=float).T  # (channels, samples)
+        #     print("test1",new.shape)
+
+
+        #     # 拼接进缓存
+        #     buf = np.concatenate([self._stash, new], axis=1)
+
+        #     if buf.shape[1] >= target:
+        #         # 截取固定长度作为本次 chunk
+        #         chunk = buf[:, :target]
+        #         # 剩余留作下次
+        #         self._stash = buf[:, target:]
+        #     else:
+        #         # 不足则零填充到固定长度
+        #         pad = np.zeros((self._stash.shape[0], target - buf.shape[1]), dtype=buf.dtype)
+        #         chunk = np.concatenate([buf, pad], axis=1)
+        #         self._stash = np.empty((self._stash.shape[0], 0), dtype=buf.dtype)
+
+        #     # 后续处理继续用 chunk（shape: channels x target）
+        #     # chunk = EEGSignalProcessor.eeg_filter(chunk, self.srate, cutoff=self.cutoff)
+        #     # ... 你的后续逻辑
+        #     print("test",chunk.shape)
+        # 采集（保持低延迟）
+
+
+        # samples, timestamps = self.inlet.pull_chunk(timeout=0.0)
+        # if timestamps:
+        #     new = np.asarray(samples, dtype=float).T
+        #     if new.shape[0] != 37:
+        #         new = new[:37, :]
+            
+        #     # 累积到 stash
+        #     if self._stash is None:
+        #         self._stash = new
+        #     else:
+        #         self._stash = np.concatenate([self._stash, new], axis=1)
+            
+        #     # 只有当 stash 足够时才处理
+        #     if self._stash.shape[1] >= self.fixed_chunk_len:
+        #         # 取固定长度处理
+        #         chunk = self._stash[:, :self.fixed_chunk_len]
+        #         # 剩余部分保留
+        #         self._stash = self._stash[:, self.fixed_chunk_len:]
+        #         print("chunk",chunk.shape)
+        #     else:
+        #         print("nothing")
+        #         return
+
+        '''
+        暂时先不用这个，因为我发现在orica_processor.py中，updata_buffer会保持一个稳定的长度
+        所以虽然chunk长度不一致，但是我能够保证我后续在使用orica的时候能够从稳定长度的buffer中取数据
+        
+        '''
+
+
+
+
+
+
+        # samples, timestamps = self.inlet.pull_chunk(timeout=0.0)
+        # if timestamps:
+
+        #     new = np.asarray(samples, dtype=float).T  # (channels, samples)
+        #     print("new1",new.shape)
+        #     if new.shape[0] != 37:
+        #         new = new[:37, :]
+
+        #     print("new",new.shape)
+
+        #     # 写入原始环形缓冲（实时）
+        #     self.buffer_real = np.roll(self.buffer_real, -new.shape[1], axis=1)
+        #     #self.buffer_real[:, -new.shape[1]:] = EEGSignalProcessor.eeg_filter(new, self.srate, cutoff=self.cutoff)
+        #     self.buffer_real[:, -new.shape[1]:] = new
+
+        #     print("buffer_real",self.buffer_real.shape)
+        #     # 处理/绘图用固定帧长（不等待）：直接从环形缓冲取“最近 target 列”
+        #     target = self.fixed_chunk_len  # 例如 int(self.srate / self.refresh_rate) 或 50
+        #     print("target",target)
+        #     take = min(target, self.buffer_real.shape[1])
+        #     print("take",take)
+        #     chunk = self.buffer_real[:, -take:]  # chunk 列数<=target，但不中断、不填充
+        #     print("chunk",chunk.shape)
+
+        #     # 如果你“必须”喂固定列数给算法：仅在足够时才处理；不够时跳过本帧
+        #     if take < target:
+        #         print("take < target")
+        #         return  # 本帧跳过处理，继续保持实时采集与显示
+
+
         samples, timestamps = self.inlet.pull_chunk(timeout=0.0)
+        #samples, timestamps = self.inlet.pull_chunk(max_samples=100, timeout=0.0)#
+        '''
+        timestampes 有的时候可能是(0,),这种情况就是没有数据，下面的if判定就不会执行。
+        timestampes 有数据的时候就会是(samples的size,0)这样的数据，代表了每一个sample都有一个时间戳
+        '''
         if timestamps:
-            chunk = np.array(samples).T  # shape: (channels, samples)
+            chunk = np.array(samples).T  # shape: (channels, samples)这里的samples的大小是不固定的
             #print("test",chunk.shape) # 
 
             # Step 1: Bandpass or highpass filter
@@ -319,6 +356,8 @@ class LSLStreamReceiver:
             if len(self.chunk_pairs) > 1:
                 self.chunk_pairs.pop(0)
 
+            self.pair_buffer = (self.raw_buffer, self.buffer)
+
             # ✅ Step 4: 回调分析函数
             # for fn in self.analysis_callbacks: # 移除此行
             #     try: # 移除此行
@@ -349,6 +388,7 @@ class LSLStreamReceiver:
             self.nbchan = len(new_range)
             self.reinitialize_orica()
             print(f"🔁 通道更新: {self.chan_labels}")
+
 
     def register_analysis_callback(self, callback_fn):
         """注册一个函数用于处理每次更新后的数据段 chunk"""
@@ -400,7 +440,10 @@ class LSLStreamReceiver:
         """获取最新的处理后数据（ORICA + ASR）"""
         return self.last_processed_chunk.copy() if self.last_processed_chunk is not None else None
 
-    def get_pair_data(self, data_type='processed'):
+    def get_pair_data(self):
+        return self.pair_buffer[0][self.channel_range, :], self.pair_buffer[1][self.channel_range, :] if self.pair_buffer is not None else None
+
+    def get_pair_data_old(self, data_type='processed'):
         if data_type == 'raw':
             return self.chunk_pairs.copy()[0][1][self.channel_range, :] if self.chunk_pairs is not None else None
         else:
