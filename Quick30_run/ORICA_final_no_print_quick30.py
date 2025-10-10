@@ -5,12 +5,18 @@ from ORICA_calibration import ORICACalibration
 from scipy.linalg import sqrtm
 import scipy
 
-class ORICA_final:
+# 禁用所有print输出
+def _noop_print(*args, **kwargs):
+    pass
+
+print = _noop_print
+
+class ORICA_final_new:
     def __init__(self, n_components, learning_rate=0.001, ortho_every=10, 
                  use_rls_whitening=False, forgetting_factor=0.98, 
                  nonlinearity='gaussian', block_size_ica=1, block_size_white=8,
-                 ff_profile='cooling', tau_const=np.inf, gamma=0.6, lambda_0=0.995,
-                 num_subgaussian=0, eval_convergence=True, verbose=False):
+                 ff_profile='cooling', tau_const=3, gamma=0.6, lambda_0=0.995,
+                 num_subgaussian=0, eval_convergence=True, verbose=False, srate=500):
         """
         ORICA with RLS whitening support - 基于MATLAB orica.m实现
         
@@ -46,10 +52,15 @@ class ORICA_final:
         
         # 遗忘因子参数
         self.ff_profile = ff_profile
+        self.srate = srate
         self.tau_const = tau_const
         self.gamma = gamma
         self.lambda_0 = lambda_0
-        self.lambda_const = 1 - np.exp(-1/tau_const) if tau_const != np.inf else 0.98
+        self.lambda_const = 1 - np.exp(-1/(self.tau_const*self.srate)) if tau_const != np.inf else 0.98
+        
+        print("srate",self.srate)
+        print("tau_const",self.tau_const)
+        print("lambda_const",self.lambda_const)
         
         # 次高斯源参数
         self.num_subgaussian = num_subgaussian
@@ -67,7 +78,7 @@ class ORICA_final:
         
         # 状态变量
         self.lambda_k = np.zeros(block_size_ica)
-        self.counter = 0
+        self.counter = 7681
         
         # RLS白化参数
         self.use_rls_whitening = use_rls_whitening
@@ -101,11 +112,36 @@ class ORICA_final:
             print(f"✅ 调整n_components为{self.n_components}")
         
         print("initialize")
-        data = np.load(r"D:\work\Python_Project\ORICA\temp_txt\orica_mats_20250915_040207.npz")
-        self.W = data["icaweights"]
-        self.whitening_matrix = data["icasphere"]
-        print("self.W",self.W.shape)
-        print("self.whitening_matrix",self.whitening_matrix.shape)
+        #data = scipy.io.loadmat(r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_20251001_163725.mat")
+        data = scipy.io.loadmat(r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_20251008_030649.mat")
+        
+        cleaned_data = data['cleaned_data']
+        # 获取所有字段名
+        field_names = cleaned_data.dtype.names
+        print(f"字段名: {field_names}")
+
+        # 尝试访问icaweights和icasphere
+        try:
+            icaweights = cleaned_data[0, 0]['icaweights']
+            print(f"\nicaweights 类型: {type(icaweights)}")
+            print(f"icaweights 形状: {icaweights.shape}")
+            print(f"icaweights 内容: {icaweights[0:3,0:3]}")
+            self.W = icaweights
+            
+            icasphere = cleaned_data[0, 0]['icasphere']
+            print(f"\nicasphere 类型: {type(icasphere)}")
+            print(f"icasphere 形状: {icasphere.shape}")
+            print(f"icasphere 内容: {icasphere[0:3,0:3]}")
+            self.whitening_matrix = icasphere
+            
+        except Exception as e:
+            print(f"访问字段时出错: {e}")
+
+        # self.W = data["icaweights"]
+        # self.whitening_matrix = data["icasphere"]
+        # print(data)
+        # print("self.W",self.W)
+        # print("self.whitening_matrix",self.whitening_matrix.shape)
         print("initialize done")
         # try:
         #     # 去均值
@@ -147,6 +183,7 @@ class ORICA_final:
         返回:
         state: 更新后的状态
         """
+        print(f"白化矩阵before: {state['icasphere'][0:3,0:3]}")
         nPts = blockdata.shape[1]
 
         
@@ -156,14 +193,30 @@ class ORICA_final:
         # 计算遗忘因子 - 完全按照MATLAB的逻辑
         # MATLAB: lambda = genCoolingFF(state.counter+dataRange, adaptiveFF.gamma, adaptiveFF.lambda_0);
 
+        print("oricain201")
+        print("state['counter']",state['counter'])
+        print("data_range",data_range)
+        print("gamma",gamma)
+        print("lambda_0",lambda_0)
         lambda_values = self.gen_cooling_ff(state['counter'] + data_range, gamma, lambda_0)
-        lambda_const=1 - np.exp(-1 / np.inf)
+
+        #lambda_const=1 - np.exp(-1 / np.inf)
+        #lambda_const = 1 - np.exp(-1/3)  # 约0.000667，不是0
 
         # MATLAB: if lambda(1) < adaptiveFF.lambda_const
         #         lambda = repmat(adaptiveFF.lambda_const,1,nPts);
+
                 
-        if lambda_values[0] < lambda_const:
-            lambda_values = np.full(len(data_range), lambda_const)
+        #if lambda_values[0] < self.lambda_const:
+        if True:#因为quick30使用了const
+            print("w"*100)
+            print("lambda_k[0] < lambda_const orica",lambda_values[0],lambda_const)
+            lambda_values = np.full(len(data_range), self.lambda_const)
+        
+        print("lambda_values2",lambda_values)
+
+        print("blockdata_size",blockdata.shape)
+        print("blockdata",blockdata[0:3,0:3])
 
 
 
@@ -178,8 +231,19 @@ class ORICA_final:
         #save_txt("201.txt",blockdata)
 
         # 1. 使用当前白化矩阵预处理数据
+
+        print("oricain21")
+        print("state['icasphere']_shape",state['icasphere'].shape)
+        print("state['icasphere']",state['icasphere'][0:3,0:3])
+        print("blockdata_shape",blockdata.shape)
+        print("blockdata",blockdata[0:3,0:3])
+
         v = state['icasphere'] @ blockdata  # 预白化数据
         v = self.snap_to_kbits(v, k=38)
+
+        
+        print("v_shape",v.shape)
+        print("v",v[0:3,0:3])
 
 
         #print("blockdata",blockdata)
@@ -193,7 +257,10 @@ class ORICA_final:
         # 2. 计算遗忘因子 - 修复：使用中间值，与MATLAB完全一致
         # MATLAB: lambda_avg = 1 - lambda(ceil(end/2));
         #lambda_avg = 1 - adaptive_ff['lambda'][len(adaptive_ff['lambda'])//2]
+        print("lambda_values_before",lambda_values)
         lambda_avg = 1 - lambda_values[int(np.ceil(len(lambda_values) / 2)) - 1]
+        print("lambda_avg",lambda_avg)
+        print("lambda_values",lambda_values)
 
         # save_txt("28.txt",lambda_avg)
         
@@ -205,12 +272,16 @@ class ORICA_final:
         # 方式 2：用 vdot（对第一个参数做共轭，再做内积；等价于 Frobenius 范数平方）
         #QWhite = lambda_avg/(1 - lambda_avg) + (np.vdot(v, v).real) / nPts
         # 方式 3：直接用 Frobenius 范数
-        QWhite = lambda_avg/(1 - lambda_avg) + (np.linalg.norm(v, 'fro')**2) / nPts
+        QWhite = lambda_avg/(1 - lambda_avg) + (np.linalg.norm(v, 'fro')**2) / len(data_range)
 
 
 
 
         QWhite = self.snap_to_kbits(QWhite, k=38)
+
+
+        print("Qwhite_shape",QWhite.shape)
+        print("Qwhite",QWhite)
 
         # save_txt("22.txt",QWhite)
 
@@ -227,6 +298,8 @@ class ORICA_final:
 
         
         state['icasphere'] = (1/lambda_avg) * (state['icasphere'] - update_term)
+
+        print(f"白化矩阵: {state['icasphere'][0:3,0:3]}")
 
 
 
@@ -259,23 +332,30 @@ class ORICA_final:
         # save_txt("26.txt",lambda_0)
         t_safe = np.maximum(t, 1e-10)
         #lambda_values = lambda_0 / (t ** gamma)
+        print("oricain20101")
+        print("t",t)
+        print("gamma",gamma)
+        print("lambda_0",lambda_0)
         lambda_values = lambda_0 / np.power(t, gamma)
+        print("lambda_values",lambda_values)
 
 
         # 用法
         #lambda_ = lambda_0 / np.power(t, gamma)
         lambda_values = self.snap_to_kbits(lambda_values, k=50)
+        print("lambda_values2",lambda_values)
 
 
         # save_txt("27.txt",lambda_values.reshape(1, -1))
         return lambda_values
 
     def snap_to_kbits(self,x, k=50):  # k < 52
-        k=10
-        x = np.asarray(x, dtype=np.float64)
-        m, e = np.frexp(x)                     # x = m * 2**e，m∈[-1, -0.5)∪[0.5, 1)
-        m = np.round(m * (1 << k)) / float(1 << k)  # 只保留 k 位尾数（纯2的幂，二进制精确）
-        return np.ldexp(m, e)
+        # k=10
+        # x = np.asarray(x, dtype=np.float64)
+        # m, e = np.frexp(x)                     # x = m * 2**e，m∈[-1, -0.5)∪[0.5, 1)
+        # m = np.round(m * (1 << k)) / float(1 << k)  # 只保留 k 位尾数（纯2的幂，二进制精确）
+        # return np.ldexp(m, e)
+        return x
 
     def dynamic_orica_cooling(self,blockdata, data_range, state=None, gamma=0.5, lambda_0=1.0):
         """
@@ -311,14 +391,18 @@ class ORICA_final:
         Y = W @ X  # (n_chs, n_pts)
         # save_txt("5.txt",Y)
         #print("blockdata",blockdata)
-        #print("Y",Y)
+        # print("Y.shape",Y.shape)
+        # print("Y",Y[0:3,:])
 
         # (2) 非线性（extended-Infomax 的符号）
         F = np.empty_like(Y)
         idx_sg  = state["kurtsign"]           # super-gaussian
         idx_sub = ~state["kurtsign"]          # sub-gaussian
-        F[idx_sg, :]  = -2.0 * np.tanh(Y[idx_sg, :])
-        F[idx_sub, :] =  2.0 * np.tanh(Y[idx_sub, :])
+        # F[idx_sg, :]  = -2.0 * np.tanh(Y[idx_sg, :])
+        # F[idx_sub, :] =  2.0 * np.tanh(Y[idx_sub, :])
+        # 在dynamic_orica_cooling中修复
+        F[idx_sg, :] = -2.0 * np.tanh(Y[idx_sg, :])           # 超高斯：正确
+        F[idx_sub, :] = np.tanh(Y[idx_sub, :]) - Y[idx_sub, :]  # 次高斯：修复
 
         # print("F",F.shape)
         # print("F",F)
@@ -353,6 +437,8 @@ class ORICA_final:
             # Frobenius norm
             state["nonStatIdx"] = np.linalg.norm(state["Rn"], 'fro')
 
+            #print("state['nonStatIdx']",state["nonStatIdx"])
+
         
 
 
@@ -364,13 +450,17 @@ class ORICA_final:
         # print("state['counter']",state['counter'])
         # print("data_range",data_range)
         state['counter'] += n_pts
-        lambda_const=1 - np.exp(-1 / np.inf)
+        #lambda_const=1 - np.exp(-1 / np.inf)
+        #lambda_const = 1 - np.exp(-1/3)  # 约0.000667，不是0
 
         # MATLAB: if lambda(1) < adaptiveFF.lambda_const
         #         lambda = repmat(adaptiveFF.lambda_const,1,nPts);
                 
-        if lambda_k[0] < lambda_const:
-            lambda_k = np.full(len(data_range), lambda_const)
+        #if lambda_k[0] < self.lambda_const:
+        if True:#因为quick30使用了const
+            print("进入orica了")
+            print("lambda_k[0] < lambda_const orica",lambda_k[0],self.lambda_const)
+            lambda_k = np.full(len(data_range), self.lambda_const)
 
 
         
@@ -509,6 +599,11 @@ class ORICA_final:
 
         # # 写回
         # state["icaweights"] = W
+
+
+        print("oricain4")
+        print("state['icaweights'].shape",state["icaweights"].shape)
+        print("state['icaweights']",state["icaweights"][0:3,0:3])
         return state
 
 
@@ -599,6 +694,26 @@ class ORICA_final:
         sphere: 最终白化矩阵
         """
         nChs, nPts = data.shape
+        print("oricain1")
+        print("data.shape",data.shape)
+        print("data",data[0:3,0:3])
+
+        #original_data = data.copy()
+        #这里需要注意的是，center仅仅用于online whitening，算mixtures还是用original_data
+
+        data_center = data.copy()
+        data_center -= data.mean(axis=1, keepdims=True)
+
+        print("data_center",data_center[0:3,0:3])
+
+        print("oricain1")
+        print("data_center.shape",data_center.shape)
+        print("data_center",data_center[0:3,0:3])
+        print("self.whitening_matrix_shape",self.whitening_matrix.shape)
+        print("self.whitening_matrix",self.whitening_matrix[0:3,0:3])
+        print("self.W_shape",self.W.shape)
+        print("self.W",self.W[0:3,0:3])
+
         
         # # # 初始化状态
         # state = {
@@ -614,25 +729,39 @@ class ORICA_final:
                 'icaweights': self.W,  # 使用当前解混矩阵
                 'counter': self.counter
             }
-            #print("🔄 使用当前权重矩阵初始化状态")
+            print("🔄 使用当前权重矩阵初始化状态")
         else:
+            # 使用随机正交矩阵初始化（类似 MATLAB: [U,~,~] = svd(rand(nChs)); state.icasphere = U）
+            # 这里采用 QR 分解获取正交矩阵 Q，等价可行且更高效
+            rand_mat = np.random.randn(nChs, nChs)
+            Q, R = np.linalg.qr(rand_mat)
+            # 可选：将 R 的符号归入 Q，保证对角线为正，从而使 Q 的分布更均匀
+            signs = np.sign(np.diag(R))
+            signs[signs == 0] = 1.0
+            Q = Q * signs
+
             state = {
-                'icasphere': np.eye(nChs),  # 初始白化矩阵为单位矩阵
-                'icaweights': np.eye(nChs),  # 初始ICA权重矩阵
+                'icasphere': np.eye(nChs),                 # 初始白化矩阵为随机正交矩阵
+                'icaweights': np.eye(nChs),     # 初始ICA权重矩阵仍用单位阵
                 'counter': 0
             }
-            print("🔄 使用默认单位矩阵初始化状态")
+            print("🔄 使用随机正交矩阵初始化白化矩阵")
 
         # print("xxxxxxxx")
         # print(np.array_equal(self.record, state['icaweights']))
         # print("xxxxxxxx")
         # save_txt("13.txt", data)
         # 预白化整个数据集
-        data = state['icasphere'] @ data  # 对应MATLAB: data = state.icasphere * data;
+        #data = state['icasphere'] @ data  # 对应MATLAB: data = state.icasphere * data;
         # save_txt("14.txt", data)  # 保存预白化后的数据
         
         # 数据分块 - 确保每个块都是固定的block_size_white大小
         num_block = int(np.floor(nPts / block_size_white))
+        print("num_block",num_block)
+
+        numsplits = nPts // block_size_white  # 等同于 MATLAB 的 floor(nPts/blockSize)
+        print("numsplits",numsplits)
+
         
         if verbose:
 
@@ -640,25 +769,48 @@ class ORICA_final:
             start_time = time.time()
         
         for it in range(num_pass):
-            # print("dog")
+            print("cat")
             # print(data[:3])
             #range(1)就只有一个数
             #for bi in range(11):
             for bi in range(num_block):
-                # 计算当前数据块范围 - 确保每个块都是固定的block_size_white大小
-                start_idx = bi * block_size_white
-                end_idx = min(nPts, (bi + 1) * block_size_white)
-                data_range = np.arange(start_idx, end_idx)
+                # # 计算当前数据块范围 - 确保每个块都是固定的block_size_white大小
+                # start_idx = bi * block_size_white
+                # end_idx = min(nPts, (bi + 1) * block_size_white)
+                # data_range = np.arange(start_idx, end_idx)
+                # print("data_range",data_range)
                 
-                # 如果剩余数据不足一个完整块，跳过
-                if end_idx - start_idx < block_size_white:
-                    break
+                # # 如果剩余数据不足一个完整块，跳过
+                # if end_idx - start_idx < block_size_white:
+                #     break
 
-                # save_txt("11.txt",data)
-                # 提取当前数据块
-                blockdata = data[:, data_range]
-                # save_txt("12.txt",blockdata)
-                nPts_block = blockdata.shape[1]
+                # # save_txt("11.txt",data)
+                # # 提取当前数据块
+                # blockdata = data[:, data_range]
+                # ====== MATLAB-style block split (avg partition with floor) ======
+                # 假设：nPts = data.shape[1], numsplits = nPts // block_size_white
+                # start_idx = int(np.floor(bi * nPts / numsplits))                 # 含
+                # end_idx   = min(nPts, int(np.floor((bi + 1) * nPts / numsplits)))  # 不含
+                # data_range = np.arange(start_idx, end_idx)                       # 可能是 8 或 9 长度
+                # # 提取当前数据块
+
+
+                
+                start = int(bi * nPts / numsplits)        # 从 0 开始
+                end = min(nPts, int((bi + 1) * nPts / numsplits))
+                data_range = np.arange(start, end)      # 右开区间，不需要 +1
+
+
+                print("fish")
+                print("bi",bi)
+                print("nPts",nPts)
+                print("numsplits",numsplits)
+                print("data_range",data_range)
+                blockdata = data_center[:, data_range]
+
+
+
+
 
 
 
@@ -689,32 +841,111 @@ class ORICA_final:
                 
                 # 执行RLS白化更新
                 state = self.dynamic_whitening(blockdata, data_range+1, state,  lambda_const, gamma,lambda_0)
+                
                 # save_txt("2.txt",state['icasphere'])
 
+        print("state['icasphere']_out.shape",state['icasphere'].shape)
+        print("state['icasphere']_out",state['icasphere'][0:3,0:3])
+        print("data.shape",data.shape)
+        print("data",data[0:3,0:3])
+
+        mixtures = state['icasphere'] @ data
+        print("oricain2")
+        print("mixtures.shape",mixtures.shape)
+        print("mixtures",mixtures[0:3,0:3])
+        print("icasphere_shape",state['icasphere'].shape)
+        print("icasphere",state['icasphere'][0:3,0:3])
+        print("icaweights_shape",state['icaweights'].shape)
+        print("icaweights",state['icaweights'][0:3,0:3])
+        print("data.shape",data.shape)
+        print("data",data[0:3,0:3])
+
+
+
+
+        #data[:, data_range] = state['icasphere'] @ data[:, data_range]
+        #data = state['icasphere'] @ data
+        #data[:, data_range] = mmul_strict(state['icasphere'], data[:, data_range])
+        #data[:, data_range] = self.snap_to_kbits(data[:, data_range], k=44)
+        #print("data",data.shape)
+
+        block_size_orica = 16
+        num_block_orica = int(np.floor(nPts / block_size_orica))
+        print("num_block_orica",num_block_orica)
+
+
+        print("=====================beforeorica============================")
+        for it in range(num_pass):
+            print("dog")
+            # print(data[:3])
+            #range(1)就只有一个数
+            #for bi in range(11):
+            print("times")
+            print("num_block_orica",num_block_orica)
+            for bi in range(num_block_orica):
+                #计算当前数据块范围 - 确保每个块都是固定的block_size_white大小
+                # start_idx = bi * block_size_orica
+                # end_idx = min(nPts, (bi + 1) * block_size_orica)
+                # data_range = np.arange(start_idx, end_idx)
+                
+                # # 如果剩余数据不足一个完整块，跳过
+                # if end_idx - start_idx < block_size_orica:
+                #     break
+
+                # # save_txt("11.txt",data)
+                # # 提取当前数据块
+                # blockdata = data[:, data_range]
+                # # save_txt("12.txt",blockdata)
+                # nPts_block = blockdata.shape[1]
+
+
+                # start = 1 + int(bi * nPts / numsplits)
+                # end = min(nPts, int((bi + 1) * nPts / numsplits))
+                # data_range = list(range(start, end + 1))
+
+                start = int(bi * nPts / numsplits)        # 从 0 开始
+                end = min(nPts, int((bi + 1) * nPts / numsplits))
+                data_range = np.arange(start, end)      # 右开区间，不需要 +1
+
+
+
+
+                # print("blockdata.shape",blockdata.shape)
+                # print("data_range",data_range)
+                
 
 
 
                 # 更新计数器
                 #state['counter'] += len(data_range)
                 
-                if verbose and bi % 10 == 0:
-                    pass
+                # if verbose and bi % 10 == 0:
+                #     pass
+                print("oricain40")
+                print("mixtures[:, data_range].shape",mixtures[:, data_range].shape)
+                print("mixtures[:, data_range]",mixtures[:, data_range][0:3,0:3])
+                print("data_range",data_range)
 
-                data[:, data_range] = state['icasphere'] @ data[:, data_range]
-                #data[:, data_range] = mmul_strict(state['icasphere'], data[:, data_range])
-                data[:, data_range] = self.snap_to_kbits(data[:, data_range], k=44)
+                print("state['icasphere'].shape",state['icasphere'].shape)
+                print("state['icasphere']",state['icasphere'][0:3,0:3])
+
+                print("state['icaweights'].shape",state['icaweights'].shape)
+                print("state['icaweights']",state['icaweights'][0:3,0:3])
+                print("gamma",gamma)
+                print("lambda_0",lambda_0)
+
                 # save_txt("3.txt",data[:, data_range])
-                #state=self.dynamic_orica_cooling(data[:, data_range], data_range+1, state, gamma, lambda_0)
+                state=self.dynamic_orica_cooling(mixtures[:, data_range], data_range+1, state, gamma, lambda_0)
                 
-                countxxx=0
-                #print("data[:, data_range].shape",data[:, data_range].shape)
-                # ORICA按1个样本为单位处理（确保block_size_ica=1）
-                for sample_idx in range(data[:, data_range].shape[1]):
-                    countxxx+=1
-                    #print("coyuntersssxx",countxxx)
-                    single_sample = data[:, data_range][:, sample_idx:sample_idx+1]  # 取单个样本
-                    single_range = np.array([data_range[sample_idx]])  # 对应的索引
-                    state = self.dynamic_orica_cooling(single_sample, single_range+1, state, gamma, lambda_0)
+                # countxxx=0
+                # #print("data[:, data_range].shape",data[:, data_range].shape)
+                # # ORICA按1个样本为单位处理（确保block_size_ica=1）
+                # for sample_idx in range(data[:, data_range].shape[1]):
+                #     countxxx+=1
+                #     #print("coyuntersssxx",countxxx)
+                #     single_sample = data[:, data_range][:, sample_idx:sample_idx+1]  # 取单个样本
+                #     single_range = np.array([data_range[sample_idx]])  # 对应的索引
+                #     state = self.dynamic_orica_cooling(single_sample, single_range+1, state, gamma, lambda_0)
                 
 
 
@@ -736,6 +967,44 @@ class ORICA_final:
         if verbose:
             elapsed_time = time.time() - start_time
 
+
+        print("=====================after orica============================")
+
+
+
+
+        #mixtures = state['icasphere'] @ data
+        print("mixtures.shape",mixtures.shape)
+        print("mixtures",mixtures[0:3,0:3])
+
+        icaact=state['icaweights'] @ mixtures
+        print("icaact.shape",icaact.shape)
+        print("icaact",icaact[0:3,0:3])
+
+
+        
+        print("state['icasphere']_out.shape",state['icasphere'].shape)
+        print("state['icasphere']_out",state['icasphere'][0:3,0:3])
+        print("state['icaweights']_out.shape",state['icaweights'].shape)
+        print("state['icaweights']_out",state['icaweights'][0:3,0:3])
+
+
+        print("bigbigbig")
+
+        print("oricain3")
+        print("mixtures.shape",mixtures.shape)
+        print("mixtures",mixtures[0:3,0:3])
+        print("icasphere_shape",state['icasphere'].shape)
+        print("icasphere",state['icasphere'][0:3,0:3])
+        print("icaweights_shape",state['icaweights'].shape)
+        print("icaweights",state['icaweights'][0:3,0:3])
+        print("data.shape",data.shape)
+        print("data",data[0:3,0:3])
+        print("icaact_shape",icaact.shape)
+        print("icaact",icaact[0:3,0:3])
+        
+
+
         self.record=state['icaweights']
         self.counter=state['counter']
         # print('self.counter',self.counter)
@@ -754,9 +1023,9 @@ class ORICA_final:
 
 
     def fit(self,data,
-            block_size_white=8,
+            block_size_white=16,
             num_pass=1,
-            lambda_0=0.995,
+            lambda_0=0.5,
             gamma=0.6,
             lambda_const=0.95,
             verbose=False):
@@ -775,6 +1044,9 @@ class ORICA_final:
         X = data.T.astype(np.float64, copy=False)
 
         # 调用你文件内的白化+ORICA主流程，得到权重和白化矩阵
+
+
+
 
         weights, sphere = self.orica_rls_whitening(
             X,
@@ -902,3 +1174,239 @@ class ORICA_final:
             raise ValueError("forgetting_factor must be between 0 and 1")
         self.forgetting_factor = forgetting_factor
 
+
+if __name__ == "__main__":
+    print("single chunk test")
+
+
+
+
+    import os
+    import numpy as np
+    from scipy.io import loadmat
+
+    set_path = r"D:\work\Python_Project\ORICA\temp_txt\Demo_EmotivEPOC_EyeOpen.set"
+
+    S = loadmat(set_path, squeeze_me=True, struct_as_record=False)
+    EEG = S["EEG"]
+    print("EEG",EEG)
+
+
+
+
+    def _get(obj, name):
+        # 兼容 scipy 加载成对象或字典的两种情况
+        return getattr(obj, name) if hasattr(obj, name) else obj[name]
+
+    nbchan = int(_get(EEG, 'nbchan'))
+    pnts   = int(_get(EEG, 'pnts'))
+    data_f = _get(EEG, 'data')  # 外部 .fdt 文件名或直接内嵌矩阵\
+
+    icapshere_f = _get(EEG, 'icasphere')
+    icaweights_f = _get(EEG, 'icaweights')
+
+
+
+
+    if isinstance(data_f, (str, bytes, np.str_)):
+        fdt_path = data_f if os.path.isabs(data_f) else os.path.join(os.path.dirname(set_path), data_f)
+        # 直接读取 .fdt 的原始 float32（EEGLAB 按列写入）→ 重塑为 (channels, time)
+        X = np.fromfile(fdt_path, dtype='<f4', count=nbchan * pnts).reshape((nbchan, pnts), order='F')
+    else:
+        # 少见：数据内嵌在 .set
+        X = np.asarray(data_f, dtype=np.float32, order='F')
+
+    X = X.astype(np.float64, copy=False)   # float32→float64 是精确映射
+    print("X",X.shape)
+    print(X[0:3,0:3])
+
+
+    """
+    截取数据 60s
+    """
+    # 采样率与时间轴起点（秒）
+    srate = float(EEG.srate)
+    xmin  = float(getattr(EEG, "xmin", 0.0))  # EEGLAB 通常是 0；若不是 0 需考虑偏移
+
+    # 读取 data：可能是内存矩阵，也可能是指向 .fdt 的文件名
+    if isinstance(EEG.data, np.ndarray):
+        data = EEG.data.astype(np.float32, copy=False)
+    else:
+        # data 是 .fdt 文件路径（相对 .set）
+        fdt_rel = str(EEG.data)
+        fdt_path = os.path.join(os.path.dirname(set_path), fdt_rel)
+        nbchan = int(EEG.nbchan)
+        pnts   = int(EEG.pnts)
+        flat = np.fromfile(fdt_path, dtype="<f4", count=nbchan * pnts)  # float32, little-endian
+        # EEGLAB 线性存储为列主序（样本为列），用 order='F' 复原为 (channels, samples)
+        data = flat.reshape((nbchan, pnts), order="F")
+
+        icasphere_ff = EEG.icasphere
+        icaweights_ff = EEG.icaweights
+
+    print("data shape:", data.shape, "srate:", srate, "xmin:", xmin)
+
+    # 定义时间窗口（秒）：等价于 pop_select(...,'time',[0, 60])
+    window = (0.0, 60.0)  # (t0, t1)
+
+    # 若给定标量 T，按 [0, T]
+    if np.isscalar(window):
+        t0, t1 = 0.0, float(window)
+    else:
+        t0, t1 = map(float, window)
+
+    # 将时间转为采样下标（考虑 xmin 偏移），含起始、含结束（尽量对齐 EEGLAB 行为）
+    start = max(0, int(np.floor((t0 - xmin) * srate)))
+    end   = int(np.floor((t1 - xmin) * srate))  # 右开或右闭均可；这里先右开
+    end   = min(end, data.shape[1])
+
+    win_data = data[:, start:end]
+
+    print("data",data.shape)
+    print("data",data[0:3,0:3])
+    print("icapshere_ff",icasphere_ff.shape)
+    print("icapshere_ff",icasphere_ff[0:3,0:3])
+    print("icaweights_ff",icaweights_ff.shape)
+    print("icaweights_ff",icaweights_ff[0:3,0:3])
+
+    print("windowed data:", win_data.shape)
+    print("windowed data",win_data[0:3,0:3])
+
+
+
+
+
+    X = win_data
+    # 确保数据是 (samples, channels) 格式
+    if X.shape[0] < X.shape[1]:
+        X = X.T
+    print(f"调整后的数据形状: {X.shape}")
+
+        # 创建 ORICA 实例
+    #n_components = min(X.shape[1], 14)  # 使用通道数或14，取较小值
+    n_components = X.shape[1]
+    orica = ORICA_final_new(
+        n_components=n_components,
+        learning_rate=0.001,
+        use_rls_whitening=True,
+        block_size_white=8,
+        block_size_ica=1,
+        gamma=0.6,
+        lambda_0=0.995,
+        verbose=True
+    )
+    
+    print("开始 ORICA 处理...")
+    # 使用 ORICA 处理数据
+    sources, weights, sphere = orica.fit(
+        X,
+        block_size_white=8,
+        num_pass=1,
+        lambda_0=0.995,
+        gamma=0.6,
+        lambda_const=0.95,
+        verbose=True
+    )
+    
+    print(f"处理完成!")
+    print(f"源信号形状: {sources.shape}")
+    print(f"源信号: {sources[0:3,0:3]}")
+    print(f"白化矩阵形状: {sphere.shape}")
+    print(f"白化矩阵: {sphere[0:3,0:3]}")
+    print(f"权重矩阵形状: {weights.shape}")
+    print(f"权重矩阵: {weights[0:3,0:3]}")
+
+
+
+
+
+
+
+
+
+
+
+
+    # 加载数据
+    data_dict = scipy.io.loadmat(r'D:\work\matlab_project\REST\X.mat')
+    X = data_dict['X']  # 假设数据存储在 'X' 键中
+    print(f"加载的数据形状: {X.shape}")
+    print(f"加载的数据: {X[0:3,0:3]}")
+    
+    # 确保数据是 (samples, channels) 格式
+    if X.shape[0] < X.shape[1]:
+        X = X.T
+    print(f"调整后的数据形状: {X.shape}")
+    
+    # 创建 ORICA 实例
+    #n_components = min(X.shape[1], 14)  # 使用通道数或14，取较小值
+    n_components = X.shape[1]
+    orica = ORICA_final_new(
+        n_components=n_components,
+        learning_rate=0.001,
+        use_rls_whitening=True,
+        block_size_white=8,
+        block_size_ica=1,
+        gamma=0.6,
+        lambda_0=0.995,
+        verbose=True
+    )
+    
+    print("开始 ORICA 处理...")
+    # 使用 ORICA 处理数据
+    sources, weights, sphere = orica.fit(
+        X,
+        block_size_white=8,
+        num_pass=1,
+        lambda_0=0.995,
+        gamma=0.6,
+        lambda_const=0.95,
+        verbose=True
+    )
+    
+    print(f"处理完成!")
+    print(f"源信号形状: {sources.shape}")
+    print(f"源信号: {sources[0:3,0:3]}")
+    print(f"白化矩阵形状: {sphere.shape}")
+    print(f"白化矩阵: {sphere[0:3,0:3]}")
+    print(f"权重矩阵形状: {weights.shape}")
+    print(f"权重矩阵: {weights[0:3,0:3]}")
+
+    # 保存结果
+    output_file = r'D:\work\Python_Project\ORICA\temp_txt\orica_results_X.mat'
+    scipy.io.savemat(output_file, {
+        'sources': sources,
+        'weights': weights,
+        'sphere': sphere,
+        'X_original': X
+    })
+    print(f"结果已保存到: {output_file}")
+    
+    # 评估分离效果
+    print("\n=== 分离效果评估 ===")
+    kurtosis_values = orica.evaluate_separation(sources.T)
+    print(f"峰度值: {kurtosis_values}")
+    print(f"平均峰度: {np.mean(np.abs(kurtosis_values)):.4f}")
+    
+    # 计算互信息
+    if sources.shape[1] <= 10:  # 只对少量成分计算互信息
+        mi_matrix = orica.calc_mutual_info_matrix(sources.T)
+        print(f"互信息矩阵对角线外均值: {np.mean(mi_matrix[np.triu_indices_from(mi_matrix, k=1)]):.4f}")
+    
+    print("ORICA 处理完成!")
+
+
+
+
+
+
+'''
+1.关于使用dynamic_whitening之前做的白化的问题
+在orica.m中有一行是做了这个白化过程，那么用于白化的icasphere必然是上一个chunk的白化矩阵或者是初始矩阵。（在offline中是但为阵）
+但是我再flt_orica.m中没有找到这个白化过程。
+
+2.关于
+
+
+
+'''

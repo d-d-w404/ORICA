@@ -3,15 +3,21 @@ import time
 
 from pylsl import StreamInlet, resolve_byprop
 import numpy as np
-from filter_utils import EEGSignalProcessor
+#from filter_utils import EEGSignalProcessor
+
+from filter_utils_fir import example_usage
 from pylsl import resolve_streams
 from orica_processor import ORICAProcessor
 from asrpy import ASR
 import mne
 from scipy.signal import medfilt
 
+
+import numpy as np
+from mne.filter import filter_data
+
 class LSLStreamReceiver:
-    def __init__(self, stream_type='EEG', time_range=10):
+    def __init__(self, stream_type='EEG', time_range=5):
         self.stream_type = stream_type
         self.time_range = time_range
         self.inlet = None
@@ -25,7 +31,7 @@ class LSLStreamReceiver:
         self.channel_range = []
 
         self.channel_manager=None
-        self.cutoff = (0.5, 45)
+        self.cutoff = (1, 50)
 
         # ASR
         self.use_asr = False
@@ -35,6 +41,8 @@ class LSLStreamReceiver:
 
         self.raw_buffer = None  # 存放未 ASR 的 bandpass-only 历史数据
         self.buffer_real = None
+
+        self.samples_buffer = None
 
 
         self.pair_buffer = None
@@ -49,6 +57,7 @@ class LSLStreamReceiver:
         self.orica = None
         self.latest_sources = None
         self.latest_eog_indices = None
+
 
         #当我在切换通道的过程中，会让ic的个数发生改变，但是此时buffer还在运行，会导致卡死，
         #所以我需要把通道切换过程锁住
@@ -83,7 +92,7 @@ class LSLStreamReceiver:
 
         # #暂时使用name筛选stream
         stream_name = 'mybrain'
-        streams = resolve_byprop('name', stream_name, timeout=5)
+        streams = resolve_byprop('name', stream_name, timeout=60)
 
         if not streams:
             raise RuntimeError(f"No LSL stream with type '{self.stream_type}' found.")
@@ -122,7 +131,8 @@ class LSLStreamReceiver:
         #前额的5个通道
         #exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC','A2','Oz','P3','F8','PO8','F7','Fz', 'T7', 'FC6', 'F4', 'C4', 'CP6', 'Cz', 'CP5', 'O2', 'O1', 'P4', 'P7', 'P8', 'Pz', 'PO7', 'T8', 'C3', 'F3', 'FC5']
 
-        exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC','A2','Oz','P3','F8','PO8','F7']
+        exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC']#,'F7','F8'
+        #exclude =[]
         self.chan_labels = self.channel_manager.get_labels_excluding_keywords(exclude)
         self.channel_range = self.channel_manager.get_indices_excluding_keywords(exclude)
 
@@ -175,11 +185,10 @@ class LSLStreamReceiver:
             if self.orica.update_buffer(chunk[self.channel_range, :]):
             #这一句话实际上就，这个updata_buffer就保证了一个稳定长度的buffer用于orica的处理，虽然chunk大小不一，但是没有关系
                 if self.orica.fit(self.orica.data_buffer, self.channel_range, self.chan_labels, self.srate):
-                    #classify
-                    # ic_probs, ic_labels = self.orica.classify(chunk[self.channel_range, :],self.chan_labels, self.srate)
-                    # if ic_probs is not None and ic_labels is not None:
-                    #     print('ICLabel概率:', ic_probs)
-                    #     print('ICLabel标签:', ic_labels)
+                    # ✅ 从 ORICAProcessor 取出 ICLabel 结果，供 GUI 使用
+                    ic_probs, ic_labels = self.orica.get_iclabel_results()
+                    self.latest_ic_probs = ic_probs
+                    self.latest_ic_labels = ic_labels
 
 
                     cleaned = self.orica.transform(chunk[self.channel_range, :])
@@ -301,19 +310,89 @@ class LSLStreamReceiver:
         #         print("take < target")
         #         return  # 本帧跳过处理，继续保持实时采集与显示
 
-
-        samples, timestamps = self.inlet.pull_chunk(timeout=0.0)
+        #samples, timestamps = self.inlet.pull_chunk(timeout=0.0)
+        samples_random, timestamps = self.inlet.pull_chunk(timeout=0.0)
         #samples, timestamps = self.inlet.pull_chunk(max_samples=100, timeout=0.0)#
+
+        # 检查是否有数据
+        if not timestamps:
+            return
+            
+        # 转换samples_random为正确的格式 (channels, samples)
+        samples_random = np.array(samples_random).T
+        
+        if samples_random is not None:
+            print("y"*20)
+            print(samples_random.shape)
+            print(samples_random)
+            print("y"*20) 
+
+        # #这个是用于验证的时候，保证每次传入都是固定的size
+        # print("samples_random",samples_random.shape)
+        # if self.samples_buffer is None:
+        #     self.samples_buffer = samples_random.copy()
+        # else:
+        #     self.samples_buffer = np.concatenate([self.samples_buffer, samples_random], axis=1)
+        
+        # if self.samples_buffer.shape[1] >= 20:
+        #     print("samples已经满了",self.samples_buffer.shape)
+
+        #     # 取前面的100个样本作为samples
+        #     samples = self.samples_buffer[:, :20]
+            
+        #     # 把剩余的样本放到新的samples_buffer的最前面
+        #     remaining_samples = self.samples_buffer[:, 20:]
+        #     if remaining_samples.shape[1] > 0:
+        #         self.samples_buffer = remaining_samples
+        #     else:
+        #         print("合理=============================")
+        #         self.samples_buffer = None
+
+        # else:
+        #     #print("samples还没有满",self.samples_buffer.shape)
+        #     return
+    
+        #这里是不在乎samples大小的，实际中就是这样的
+        samples=samples_random
+        print("xxx")
+        print("samplesxxxxx",samples.shape)
         '''
         timestampes 有的时候可能是(0,),这种情况就是没有数据，下面的if判定就不会执行。
         timestampes 有数据的时候就会是(samples的size,0)这样的数据，代表了每一个sample都有一个时间戳
         '''
         if timestamps:
-            chunk = np.array(samples).T  # shape: (channels, samples)这里的samples的大小是不固定的
-            #print("test",chunk.shape) # 
+            chunk = np.array(samples)  # shape: (channels, samples)这里的samples的大小是不固定的
+            print("FIR filter in")
+            print("testin",chunk.shape) # test (14, 36)
+            print("testin",chunk[0:3,0:3])
 
             # Step 1: Bandpass or highpass filter
-            chunk = EEGSignalProcessor.eeg_filter(chunk, self.srate, cutoff=self.cutoff)
+            # chunk = EEGSignalProcessor.eeg_filter(chunk, self.srate, cutoff=self.cutoff)
+            # chunk,info = example_usage(chunk, self.srate)
+
+
+            
+            # filtered = filter_data(
+            #     data=chunk,
+            #     sfreq=self.srate,
+            #     l_freq=1.0,
+            #     h_freq=50.0,
+            #     method='fir',
+            #     fir_design='firwin',
+            #     fir_window='hamming',       # 更易满足阻带衰减需求
+            #     phase='minimum',           # 最小相位，对应 flt_fir 'minimum-phase'
+            #     l_trans_bandwidth=0.5,     # 对应 0.5→1 Hz 的低端过渡带
+            #     h_trans_bandwidth=5.0,     # 对应 50→55 Hz 的高端过渡带
+            #     filter_length='auto',      # 若需更强阻带，可手动加长，如 '20s' 或 8191
+            #     verbose=False
+            # )
+            # chunk = filtered
+
+            # print("testout",chunk.shape)
+            # print("testout",chunk[0:3,0:3])
+
+
+            # print("FIR filter out")
 
             # ✅ 更新原始滤波后的数据接口
             self.last_unclean_chunk = chunk.copy()
@@ -322,9 +401,73 @@ class LSLStreamReceiver:
                 self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
 
 
-            # # ✅ 新增：CAR处理
-            # if self.use_car:  # 需要添加这个标志
-            #     chunk = self.apply_car(chunk)
+            # # # ✅ 新增：CAR处理
+            # # if self.use_car:  # 需要添加这个标志
+            # #     chunk = self.apply_car(chunk)
+
+            # # Step 2: ASR处理
+            # # if self.use_asr:
+            # #     chunk = self.apply_pyprep_asr(chunk)
+
+            # print("ASR in")
+            # # pip install asrpy
+            # from asrpy import ASR
+            # # 假设：
+            # # calib: (n_channels, n_samples) 校准数据（尽量≥60秒），与在线数据同高通策略
+            # # srate: 采样率 (Hz)
+            # # stream() 产出在线分块 chunk: (n_channels, n_chunk)
+            # raw_cali = mne.io.read_raw_eeglab(r'D:\work\Python_Project\ORICA\temp_txt\Demo_EmotivEPOC_EyeOpen.set', preload=True)
+            # # 只保留 EEG 通道（去掉 EOG/stim/misc）
+            # raw_cali.pick_types(eeg=True, eog=False, stim=False, misc=False)
+
+            # # 2) 获取校准数据 calib 和采样率
+            # calib = raw_cali.get_data()      
+            #         # 形状 (n_channels, n_samples)
+            # print("raw calib")
+            # print(calib[0:3,0:3])
+
+            
+            # #去掉坏通道数据
+            # calib=self.select_clean_reference(calib,self.srate)
+            # print(calib[0:3,0:3])
+
+            # # # 1) 初始化 ASR（参数映射自 flt_repair_bursts）
+            # # asr = ASR(
+            # #     sfreq=self.srate,
+            # #     cutoff=10.0,           # stddev_cutoff
+            # #     win_len=0.5,           # window_len
+            # #     step_size=0.3333,      # block_size -> stats update step
+            # #     lookahead=0.125,       # processing_delay
+            # #     max_dims_ratio=0.66,   # max_dimensions (比例)
+            # #     spectral_weighting=False,  # 若要复刻频谱加权，这里改成 True 并提供IIR
+            # #     use_gpu=False
+            # #     # 如果库支持：decim=10  # 对应 calib_precision
+            # # )
+            # asr = ASR(
+            #     sfreq=self.srate,
+            #     cutoff=10.0,        # 典型：stddev_cutoff
+            #     win_len=0.5,        # 典型：window_len
+            # )
+            # print("done")
+
+            # # 2) 标定：用 MNE RawArray 包装 calib 并拟合
+            # cal_C, cal_S = calib.shape
+            # cal_ch_names = [f"EEG{i+1}" for i in range(cal_C)]
+            # info_cal = mne.create_info(ch_names=cal_ch_names, sfreq=self.srate, ch_types='eeg')
+            # ref_raw = mne.io.RawArray(calib, info_cal, verbose=False)
+            # asr.fit(ref_raw)
+
+            # # 3) 在线处理：同样用 RawArray 包装 chunk 再 transform
+            # print("ok")
+            # ch_C, ch_S = chunk.shape
+            # ch_ch_names = [f"EEG{i+1}" for i in range(ch_C)]
+            # info_chunk = mne.create_info(ch_names=ch_ch_names, sfreq=self.srate, ch_types='eeg')
+            # chunk_raw = mne.io.RawArray(chunk, info_chunk, verbose=False)
+            # clean_raw = asr.transform(chunk_raw)
+            # chunk = clean_raw.get_data()   # (channels, samples)
+            # # 如果库支持分离噪声，可：
+            # # clean_chunk, noise_chunk = asr.transform(chunk, return_noise=True)
+            # # 你的后续处理...
 
 
             #✅ Step X: ORICA 去眼动伪影（重构为独立函数）
@@ -334,9 +477,7 @@ class LSLStreamReceiver:
             if eog_indices is not None:
                 self.latest_eog_indices = eog_indices
 
-            # Step 2: ASR处理
-            if self.use_asr:
-                chunk = self.apply_pyprep_asr(chunk)
+
 
             # Step 3: Update ring buffer
             num_new = chunk.shape[1]
@@ -609,7 +750,89 @@ class LSLStreamReceiver:
 
         return chunk
 
+    def select_clean_reference(
+        self,
+        calib: np.ndarray,
+        srate: float,
+        window_len: float = 0.5,          # 窗长（秒）
+        window_overlap: float = 0.66,     # 重叠比例
+        zthresholds: tuple = (-3.5, 5.0), # Z 分数阈值 [下限, 上限]
+        max_bad_channels: float = 0.15    # 单窗允许的坏通道比例（或绝对数）
+    ):
 
+        """
+        基于 REST/BCILAB flt_clean_windows 的默认逻辑筛选“干净参考段”。
+        输入:
+        - calib: (n_channels, n_samples) 校准数据（已做与在线一致的高通）
+        - srate: 采样率(Hz)
+        参数:
+        - window_len: 窗长(秒)，默认 0.5
+        - window_overlap: 窗重叠比例，默认 0.66（步长 ≈ 0.17s）
+        - zthresholds: 窗口 RMS 的稳健 Z 阈值（相对“干净 EEG”分布），默认 [-3.5, 5]
+        - max_bad_channels: 单窗允许的“坏通道”上限（比例或绝对数），默认 0.15
+        返回:
+        - ref: (n_channels, n_kept_samples) 拼接的参考段
+        - sample_mask: (n_samples,) 布尔掩码，True 表示保留
+        - kept_slices: list[ slice ] 保留的窗口切片列表
+        """
+        C, S = calib.shape
+        N = int(round(window_len * srate))
+        if N <= 1 or N > S:
+            raise ValueError("window_len 导致窗口大小异常，请检查 window_len 与 srate。")
+        # 计算步长（和 BCILAB 一致：round(N*(1-overlap))）
+        step = int(round(N * (1 - window_overlap)))
+        step = max(1, step)
+        # 生成窗口起点（和 BCILAB 一致，上限为 S-N）
+        offsets = np.arange(0, max(1, S - N + 1), step, dtype=int)
+        if len(offsets) == 0:
+            offsets = np.array([0], dtype=int)
+        W = len(offsets)
+
+        # 每通道每窗口 RMS: (C, W)
+        rms = np.empty((C, W), dtype=float)
+        for wi, st in enumerate(offsets):
+            seg = calib[:, st:st + N]
+            rms[:, wi] = np.sqrt(np.mean(seg * seg, axis=1) + 1e-12)
+
+        # 每通道做稳健 Z（用 median/MAD 近似 flt_clean_windows 的稳健拟合）
+        med = np.median(rms, axis=1, keepdims=True)
+        mad = np.median(np.abs(rms - med), axis=1, keepdims=True) + 1e-12
+        # 将 MAD 转换为类似标准差的尺度（常用 1.4826）
+        robust_std = 1.4826 * mad
+        wz = (rms - med) / robust_std  # (C, W)
+
+        # 窗口层面的“坏通道计数”
+        bad_low = wz < zthresholds[0]
+        bad_high = wz > zthresholds[1]
+        bad_any = np.logical_or(bad_low, bad_high)  # (C, W)
+        bad_count = bad_any.sum(axis=0)             # (W,)
+
+        # 允许的坏通道数（比例 → 绝对数）
+        if 0 < max_bad_channels < 1:
+            max_bad_abs = int(np.round(C * max_bad_channels))
+        else:
+            max_bad_abs = int(max_bad_channels)
+        max_bad_abs = max(0, min(C - 1, max_bad_abs))  # 不允许等于或超过 C
+
+        # 需要移除的窗口：坏通道数 > 上限
+        remove_mask = bad_count > max_bad_abs
+        removed_windows = np.where(remove_mask)[0]
+        kept_windows = np.where(~remove_mask)[0]
+
+        # 生成样本掩码：移除坏窗覆盖的样本
+        sample_mask = np.ones(S, dtype=bool)
+        for wi in removed_windows:
+            st = offsets[wi]
+            sample_mask[st:st + N] = False
+
+        # 保留窗的切片列表
+        kept_slices = [slice(offsets[wi], offsets[wi] + N) for wi in kept_windows]
+
+        # 拼接参考段
+        ref = calib[:, sample_mask]
+
+        #return ref, sample_mask, kept_slices
+        return ref
 
 class ChannelManager:
     def __init__(self, lsl_info):

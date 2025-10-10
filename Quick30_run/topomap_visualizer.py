@@ -227,6 +227,17 @@ class TopomapWindow(QMainWindow):
         else:
             axes = axes.flatten()
             
+        # 从 receiver 读取最新的 ICLabel 结果
+        ic_probs = getattr(self.receiver, 'latest_ic_probs', None)
+        ic_labels = getattr(self.receiver, 'latest_ic_labels', None)
+        
+        # 计算并显示 label 统计信息
+        label_stats = ""
+        if ic_labels is not None:
+            unique_labels, counts = np.unique(ic_labels, return_counts=True)
+            total = len(ic_labels)
+            label_stats = " | ".join([f"{label}: {count}({count/total*100:.1f}%)" for label, count in zip(unique_labels, counts)])
+
         for i in range(n_to_plot):
             try:
                 mne.viz.plot_topomap(
@@ -238,10 +249,40 @@ class TopomapWindow(QMainWindow):
                     names=ch_names
                 )
                 # 只有当排序前的IC编号在eog_indices中时才标红
-                if (eog_indices is not None and sorted_idx[i] in eog_indices):
-                    axes[i].set_title(f'IC {i} (EOG)', color='red', fontsize=10)
+                is_eog = (eog_indices is not None and sorted_idx[i] in eog_indices)
+
+                # 生成标题文本，包含 ICLabel 标签与概率
+                title = f'IC {i}'
+                try:
+                    if ic_labels is not None and ic_probs is not None:
+                        orig_idx = sorted_idx[i] if sorted_idx is not None else i
+                        if orig_idx < len(ic_labels):
+                            label = ic_labels[orig_idx]
+                            prob = None
+                            # ic_probs 形状通常为 (n_components, 7)
+                            if hasattr(ic_probs, '__len__') and len(ic_probs) > orig_idx:
+                                probs_row = ic_probs[orig_idx]
+                                # 若为向量，取最大概率
+                                if hasattr(probs_row, '__len__'):
+                                    prob = float(np.max(probs_row))
+                                else:
+                                    prob = float(probs_row)
+                            
+                            # 计算该标签的统计信息
+                            label_count = list(ic_labels).count(label)
+                            label_percentage = (label_count / len(ic_labels)) * 100
+                            
+                            if prob is not None:
+                                title = f'IC {i}: {label}\n({prob:.2f})\n{label_count}/{len(ic_labels)} ({label_percentage:.1f}%)'
+                            else:
+                                title = f'IC {i}: {label}\n{label_count}/{len(ic_labels)} ({label_percentage:.1f}%)'
+                except Exception:
+                    pass
+
+                if is_eog:
+                    axes[i].set_title(title, color='red', fontsize=10)
                 else:
-                    axes[i].set_title(f'IC {i}', fontsize=10)
+                    axes[i].set_title(title, fontsize=10)
             except Exception as e:
                 axes[i].set_title(f'Topomap Error')
                 print(f"❌ Topomap绘制错误: {e}")
@@ -260,7 +301,10 @@ class TopomapWindow(QMainWindow):
         else:
             print("❌ image_label为None")
         if self.status_label is not None:
-            self.status_label.setText(f"Topomap updated ({n_to_plot} components)")
+            status_text = f"Topomap updated ({n_to_plot} components)"
+            if label_stats:
+                status_text += f" | {label_stats}"
+            self.status_label.setText(status_text)
         plt.close(fig)
 
     def toggle_auto_update(self, checked):

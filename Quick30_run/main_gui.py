@@ -113,6 +113,10 @@ class EEGGUI(QWidget):
 
         self.ica_window = None  # 初始化为空
 
+        # ✅ 新增：显示 ICLabel 结果（标签与概率）
+        self.iclabel_label = QLabel("ICLabel: (暂无)")
+        main_layout.addWidget(self.iclabel_label)
+
         # ========== topomap ==========
         self.topomap_btn = QPushButton("Show Topomap")
         self.topomap_btn.clicked.connect(self.show_topomap_window)
@@ -305,6 +309,22 @@ class EEGGUI(QWidget):
         # ✅ 设置高亮的 EOG 成分（红色显示）
         if hasattr(self.receiver, 'latest_eog_indices'):
             self.ica_window.set_eog_indices(self.receiver.latest_eog_indices)
+
+        # ✅ 同步显示 ICLabel 结果
+        ic_probs = getattr(self.receiver, 'latest_ic_probs', None)
+        ic_labels = getattr(self.receiver, 'latest_ic_labels', None)
+        if ic_labels is not None and ic_probs is not None:
+            try:
+                # 简洁显示：每个 IC 的 top-1 标签及其概率
+                lines = []
+                for i, (label, probs) in enumerate(zip(ic_labels, ic_probs)):
+                    p = float(np.max(probs)) if hasattr(probs, '__len__') else float(probs)
+                    lines.append(f"IC{i}: {label} ({p:.2f})")
+                self.iclabel_label.setText("ICLabel: " + "; ".join(lines))
+            except Exception:
+                self.iclabel_label.setText("ICLabel: (解析失败)")
+        else:
+            self.iclabel_label.setText("ICLabel: (暂无)")
 
         self.ica_window.show()
         self.ica_window.raise_()

@@ -562,62 +562,63 @@ def save_txt_old(filename, X, folder="temp_txt"):
 
 
 def save_txt(filename, X):
-    """
-    只需传 (filename, X)。兼容:
-      - 标量 -> 1x1
-      - 1D 向量 -> Nx1 (与 MATLAB 常见列向量一致)
-      - 2D 矩阵 -> 原样
-    十进制使用 Python 格式 '.17g'；HEX 为逐元素行序，big-endian 64-bit。
-    输出目录固定到 DEFAULT_DIR（自动创建）。
-    """
-    import os, struct
-    import numpy as np
+    # """
+    # 只需传 (filename, X)。兼容:
+    #   - 标量 -> 1x1
+    #   - 1D 向量 -> Nx1 (与 MATLAB 常见列向量一致)
+    #   - 2D 矩阵 -> 原样
+    # 十进制使用 Python 格式 '.17g'；HEX 为逐元素行序，big-endian 64-bit。
+    # 输出目录固定到 DEFAULT_DIR（自动创建）。
+    # """
+    # import os, struct
+    # import numpy as np
 
-    # === 内置参数（可按需改）===
-    DEFAULT_DIR = r"D:\work\Python_Project\ORICA\temp_txt"
-    DECIMAL_FMT = ".17g"         # Python 的格式，不带 %
-    ROUND_NDEC  = None           # 例如 10：np.round(X, 10)
-    HEADER_LINE = "class=double" # 与 MATLAB 风格对齐
-    HEX_HEADER  = "# IEEE754 hex (big-endian logical order, 64-bit)\n"
+    # # === 内置参数（可按需改）===
+    # DEFAULT_DIR = r"D:\work\Python_Project\ORICA\temp_txt"
+    # DECIMAL_FMT = ".17g"         # Python 的格式，不带 %
+    # ROUND_NDEC  = None           # 例如 10：np.round(X, 10)
+    # HEADER_LINE = "class=double" # 与 MATLAB 风格对齐
+    # HEX_HEADER  = "# IEEE754 hex (big-endian logical order, 64-bit)\n"
 
-    # 路径
-    if os.path.isabs(filename):
-        filepath = filename
-        os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
-    else:
-        os.makedirs(DEFAULT_DIR, exist_ok=True)
-        filepath = os.path.join(DEFAULT_DIR, filename)
+    # # 路径
+    # if os.path.isabs(filename):
+    #     filepath = filename
+    #     os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
+    # else:
+    #     os.makedirs(DEFAULT_DIR, exist_ok=True)
+    #     filepath = os.path.join(DEFAULT_DIR, filename)
 
-    # 数据准备：兼容 0D/1D/2D
-    X = np.asarray(X, dtype=np.float64)
-    if X.ndim == 0:        # 标量 -> 1x1
-        X = X.reshape(1, 1)
-    elif X.ndim == 1:      # 1D -> Nx1（列向量，贴近 MATLAB）
-        X = X.reshape(-1, 1)
-    elif X.ndim > 2:
-        raise ValueError(f"X 必须是 0/1/2 维，当前 ndim={X.ndim}, shape={X.shape}")
+    # # 数据准备：兼容 0D/1D/2D
+    # X = np.asarray(X, dtype=np.float64)
+    # if X.ndim == 0:        # 标量 -> 1x1
+    #     X = X.reshape(1, 1)
+    # elif X.ndim == 1:      # 1D -> Nx1（列向量，贴近 MATLAB）
+    #     X = X.reshape(-1, 1)
+    # elif X.ndim > 2:
+    #     raise ValueError(f"X 必须是 0/1/2 维，当前 ndim={X.ndim}, shape={X.shape}")
 
-    if ROUND_NDEC is not None:
-        X = np.round(X, ROUND_NDEC)  # 十进制与 HEX 都来自同一份量化后的数组
+    # if ROUND_NDEC is not None:
+    #     X = np.round(X, ROUND_NDEC)  # 十进制与 HEX 都来自同一份量化后的数组
 
-    nrows, ncols = X.shape
+    # nrows, ncols = X.shape
 
-    # 写文件
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"# rows={nrows} cols={ncols} {HEADER_LINE}\n")
+    # # 写文件
+    # with open(filepath, "w", encoding="utf-8") as f:
+    #     f.write(f"# rows={nrows} cols={ncols} {HEADER_LINE}\n")
 
-        # 十进制（逐元素按行）
-        for i in range(nrows):
-            line = "\t".join(f"{float(v):{DECIMAL_FMT}}" for v in X[i])
-            f.write(line + "\n")
+    #     # 十进制（逐元素按行）
+    #     for i in range(nrows):
+    #         line = "\t".join(f"{float(v):{DECIMAL_FMT}}" for v in X[i])
+    #         f.write(line + "\n")
 
-        # IEEE754 HEX（逐元素按行，big-endian, 64-bit）
-        f.write(HEX_HEADER)
-        for i in range(nrows):
-            hexrow = [struct.pack(">d", float(v)).hex() for v in X[i]]
-            f.write("\t".join(hexrow) + "\n")
+    #     # IEEE754 HEX（逐元素按行，big-endian, 64-bit）
+    #     f.write(HEX_HEADER)
+    #     for i in range(nrows):
+    #         hexrow = [struct.pack(">d", float(v)).hex() for v in X[i]]
+    #         f.write("\t".join(hexrow) + "\n")
 
-    print(f"💾 文件已保存到: {filepath}")
+    # print(f"💾 文件已保存到: {filepath}")
+    print("hjello")
 
 
 
@@ -805,7 +806,7 @@ if __name__ == "__main__":
     # 读入 .set（同目录下若有 .fdt 会自动配对）
 
 
-    raw = mne.io.read_raw_eeglab('D:\work\matlab_project\orica-master\orica-master\SIM_STAT_16ch_3min.set', preload=True, verbose='error')
+    raw = mne.io.read_raw_eeglab(r'D:\work\Python_Project\ORICA\temp_txt\Demo_EmotivEPOC_EyeOpen.set', preload=True, verbose='error')
 
 
 
@@ -833,7 +834,7 @@ if __name__ == "__main__":
     import numpy as np
     from scipy.io import loadmat
 
-    set_path = r"D:\work\matlab_project\orica-master\orica-master\SIM_STAT_16ch_3min.set"
+    set_path = r"D:\work\Python_Project\ORICA\temp_txt\Demo_EmotivEPOC_EyeOpen.set"
     
 
 
@@ -875,9 +876,9 @@ if __name__ == "__main__":
 
 
 
-    save_txt("1.txt", X)#[:,0:3])
+    # save_txt("1.txt", X)#[:,0:3])
 
-    print_full("X",X[:,0:3])
+    # print_full("X",X[:,0:3])
 
 
 
@@ -919,13 +920,13 @@ if __name__ == "__main__":
     import numpy as np, os, time
     os.makedirs("Results", exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    np.savez_compressed(f"Results/orica_mats_{stamp}.npz",
+    np.savez_compressed(f"temp_txt/orica_mats_{stamp}.npz",
                         icaweights=weights.astype(np.float64),
                         icasphere=sphere.astype(np.float64))
     print("✅ 已保存 ORICA 矩阵:", f"Results/orica_mats_{stamp}.npz")
 
 
-
+'''
     print(f"\n✅ 白化完成!")
     print(f"权重矩阵维度: {weights.shape}")
     print(f"白化矩阵维度: {sphere.shape}")
@@ -1035,7 +1036,7 @@ if __name__ == "__main__":
         print(f"⚠️ 保存结果时出现错误: {e}")
         print("但白化处理已完成")
 
-
+'''
       
 """
 源信号数据 (完整23041个样本):

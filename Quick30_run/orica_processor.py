@@ -5,6 +5,9 @@ from ORICA_enhanced import ORICAW
 #from ORICA_REST import ORICAZ
 from ORICA_REST_new import ORICAZ
 from ORICA_final import ORICA_final
+#from ORICA_final_new import ORICA_final_new
+from ORICA_final_no_print import ORICA_final_new
+#from ORICA_final_no_print_quick30 import ORICA_final_new
 # from ORICA_old import ORICA
 import numpy as np
 from scipy.signal import welch
@@ -47,6 +50,10 @@ class ORICAProcessor:
 
         self.sorted_W = None
         self.sorted_idx = None
+
+        # ✅ 保存最近一次的 ICLabel 结果，供 GUI 显示
+        self.latest_ic_probs = None
+        self.latest_ic_labels = None
 
 
 
@@ -218,9 +225,9 @@ class ORICAProcessor:
         """
 
         assert data.shape[0] == self.n_components, f"Expected {self.n_components} channels, got {data.shape[0]}"
-        #print("data.shape[1]",data.shape[1])
-        if data.shape[1] < self.max_samples:
-            return None, None, None  # Not enough data yet
+
+        # if data.shape[1] < self.max_samples:
+        #     return None, None, None  # Not enough data yet
 
 
 
@@ -243,23 +250,31 @@ class ORICAProcessor:
 
         # 只在第一次创建ORICA实例，避免重复初始化
         if self.ica is None:
-            print("🔄 首次创建ORICA实例")
-            self.ica = ORICA_final(n_components=min(self.n_components, data.shape[0]))
+            print("🔄 首次创建ORICA实例bigshit")
+            print("srate是啥呢",self.srate)
+            self.ica = ORICA_final_new(n_components=min(self.n_components, data.shape[0]),srate=self.srate)
             self.ica.initialize(data.T)
             sources,x,y = self.ica.fit(data.T)
-            # print("sources1",sources.shape)#(22,5000)
+            #print("sources1",sources.shape)#(22,5000)
             # print("srate1",self.srate)#500
             #
         else:
             sources,x,y = self.ica.fit(data.T)
+            print('data.T.shape',data.T.shape)
+            print("sources",sources.shape)#(22,5000)
+            #data.T.shape (49, 12)
+            #sources (12, 49)
             # print("sources",sources.shape)#(22,5000)
             # print("srate",self.srate)#500
-
+        print("源结果对比")
+        print("sources.shape",sources.shape)
+        print("sources",sources[0:3,0:3])
+        print("evalshit")
         self.evaluate_orica_sources(sources)
 
 
 
-        
+
         '''
             self.ica = ORICAZ(n_components=min(self.n_components, data.shape[0]))
             self.ica.initialize(data.T)  # 只在第一次初始化
@@ -297,7 +312,7 @@ class ORICAProcessor:
         #print("sources",sources.shape)
         #self.evaluate_orica_sources(sources)
         
-        #self.evaluate_orica_sources(sourcesx)
+        self.evaluate_orica_sources(sourcesx)
         print("sources",sources.shape)
         print("srate",self.srate)
         '''
@@ -338,8 +353,29 @@ class ORICAProcessor:
         #     print('ICLabel概率:', ic_probs)
         #     print('ICLabel标签:', ic_labels)
 
-        self.identify_eye_artifacts(sources, self.srate)
+        #self.identify_eye_artifacts(sources, self.srate)
         #self.identify_artifacts_by_iclabel(ic_labels, ic_probs, threshold=0.8)
+
+        # 在 fit 方法中：
+        # 使用ORICA的sources进行ICLabel分类并识别伪影
+        A = np.linalg.pinv(self.ica.W)
+
+        ic_probs, ic_labels = None, None
+        if sources is not None and A is not None:
+            try:
+                ic_probs, ic_labels = self.classify_sources_directly(data,sources, A, chan_labels, srate,n_comp=self.n_components)
+            except Exception as e:
+                print(f"ICLabel分类失败: {e}")
+
+        # 现在 self.eog_indices 已经包含了ICLabel识别的伪影
+        print(f"总伪影成分: {self.eog_indices}")
+
+        # ✅ 记录最新的 ICLabel 结果
+        self.latest_ic_probs = ic_probs
+        self.latest_ic_labels = ic_labels
+
+
+
         
 
         # 获取mixing matrix A
@@ -391,6 +427,50 @@ class ORICAProcessor:
 
         return sources, A, spectrum
 
+    # ✅ 提供获取 ICLabel 结果的便捷方法
+    def get_iclabel_results(self):
+        return self.latest_ic_probs, self.latest_ic_labels
+    
+    def _setup_emotiv_epoc_montage(self, raw, chan_names):
+        """为 Emotiv EPOC 设备设置自定义 montage"""
+        # Emotiv EPOC 的电极位置（基于实际设备布局）
+        emotiv_positions = {
+            'AF3': [0.0, 0.5, 0.0],      # 前额
+            'F7': [-0.3, 0.3, 0.0],      # 左前额
+            'F3': [-0.2, 0.4, 0.0],      # 左前额
+            'FC5': [-0.4, 0.2, 0.0],     # 左前中央
+            'T7': [-0.5, 0.0, 0.0],      # 左颞
+            'P7': [-0.4, -0.2, 0.0],     # 左后颞
+            'O1': [-0.2, -0.4, 0.0],     # 左枕
+            'O2': [0.2, -0.4, 0.0],      # 右枕
+            'P8': [0.4, -0.2, 0.0],      # 右后颞
+            'T8': [0.5, 0.0, 0.0],       # 右颞
+            'FC6': [0.4, 0.2, 0.0],      # 右前中央
+            'F4': [0.2, 0.4, 0.0],       # 右前额
+            'F8': [0.3, 0.3, 0.0],       # 右前额
+            'AF4': [0.0, 0.5, 0.0]       # 前额
+        }
+        
+        # 如果通道名称不匹配，使用圆形排列
+        if len(chan_names) == 14:
+            # 创建圆形排列的电极位置
+            angles = np.linspace(0, 2*np.pi, 14, endpoint=False)
+            positions = np.column_stack([
+                np.cos(angles) * 0.4,  # x坐标
+                np.sin(angles) * 0.4,  # y坐标
+                np.zeros(14)           # z坐标
+            ])
+            
+            # 创建自定义 montage
+            montage = mne.channels.make_dig_montage(
+                ch_pos=dict(zip(chan_names, positions)),
+                coord_frame='head'
+            )
+            raw.set_montage(montage)
+            print("✅ 已为 Emotiv EPOC 设置自定义圆形电极布局")
+        else:
+            print(f"⚠️ 通道数量 {len(chan_names)} 与 Emotiv EPOC 不匹配，使用默认布局")
+
     # def identify_eye_artifacts(self, components):
     #     """Heuristic: identify eye components as those with high frontal power and low frequency"""
     #     self.eog_indices = []
@@ -402,9 +482,127 @@ class ORICAProcessor:
     #     print("EOG artifact:",self.eog_indices)
 
 
+    def classify_sources_directly_x(self, sources, mixing_matrix, chan_names, srate, threshold=0.8,n_comp=None):
+        """直接对sources进行ICLabel分类，不依赖MNE ICA，并识别伪影"""
+        from mne_icalabel import label_components
+        
+        # 创建Raw对象
+        info = mne.create_info(chan_names, srate, ch_types='eeg')
+        raw = mne.io.RawArray(sources, info)
+        #raw.set_montage(mne.channels.make_standard_montage("standard_1020"))  # 或自定义 montage
+        
+
+        # 2) 构建 ICA 容器，并“注入” A/W（不需要再 fit）
+        ica = ICA(n_components=n_comp, method='infomax')   # method 无关紧要
+        ica.n_components_ = n_comp
+        ica.current_fit = 'unfitted'
+        ica.ch_names = chan_names
+        ica._ica_names = [f'IC {k:03d}' for k in range(n_comp)]
+
+        ica.mixing_matrix_   = mixing_matrix
+        ica.unmixing_matrix_ = np.linalg.pinv(mixing_matrix)  # 若你有 W，就直接用你的 W，mixing_matrix_=pinv(W)
 
 
-    def classify(self, data, chan_names, srate, montage='standard_1020'):
+
+
+        # 直接使用ICLabel
+        labels = label_components(raw, ica, method='iclabel')
+        
+        # 获取分类结果
+        ic_probs = labels.get('y_pred_proba', None)
+        ic_labels = labels.get('y_pred', None)
+        if ic_labels is None and 'labels' in labels:
+            ic_labels = labels['labels']
+        
+        # 识别伪影
+        self.eog_indices = []
+        if ic_labels is not None:
+            for i, label in enumerate(ic_labels):
+                if label != 'brain':  # 只要不是大脑信号，就认为是伪影
+                    self.eog_indices.append(i)
+        
+        print(f"ICLabel识别到 {len(self.eog_indices)} 个伪影成分: {self.eog_indices}")
+        
+        return ic_probs, ic_labels
+
+
+
+    def classify_sources_directly(self, data,sources, mixing_matrix, chan_names, srate, threshold=0.8, n_comp=None):
+        """直接对sources进行ICLabel分类，不依赖MNE ICA，并识别伪影"""
+        from mne_icalabel import label_components
+        from mne.preprocessing import ICA
+
+        print("classify")
+        print(data.shape)
+        print(srate)
+        
+        # 创建Raw对象
+        info = mne.create_info(chan_names, srate, ch_types='eeg')
+        raw = mne.io.RawArray(data, info)
+        
+        # 为 Emotiv EPOC 设备设置专门的 montage
+        try:
+            # 尝试使用 Emotiv EPOC 的专用 montage
+            self._setup_emotiv_epoc_montage(raw, chan_names)
+            #raw.set_montage(mne.channels.make_standard_montage("standard_1020"),on_missing='ignore',match_case=False)
+            #raw.set_montage(mne.channels.make_standard_montage("standard_1020"))
+            #raw.set_montage(mne.channels.make_standard_montage("emotiv"))
+        except ValueError:
+            # 如果失败，创建 Emotiv EPOC 的自定义 montage
+            self._setup_emotiv_epoc_montage(raw, chan_names)
+            #raw.set_montage(mne.channels.make_standard_montage("standard_1020"),on_missing='ignore',match_case=False)
+            #raw.set_montage(mne.channels.make_standard_montage("emotiv"))
+
+        
+        # 构建 ICA 容器，并"注入" A
+        print("n_comp",n_comp)
+        ica = ICA(n_components=n_comp, method='infomax')
+        ica.n_components_ = n_comp
+        ica.current_fit = 'raw'  # ✅ 关键：设置为 'raw' 而不是 'unfitted'
+        ica.ch_names = chan_names
+        ica._ica_names = [f'IC {k:03d}' for k in range(n_comp)]
+        
+        # 设置混合矩阵和分离矩阵
+        ica.mixing_matrix_ = mixing_matrix
+        ica.unmixing_matrix_ = np.linalg.pinv(mixing_matrix)
+        
+        # ✅ 添加必要的属性，让ICLabel认为ICA已经拟合
+        ica.pca_explained_variance_ = np.ones(n_comp)
+        ica.pca_mean_ = np.zeros(len(chan_names))
+        ica.pca_components_ = np.eye(n_comp, len(chan_names))
+    
+        
+        # 直接使用ICLabel
+        labels = label_components(raw, ica, method='iclabel')
+        print("labels",labels)
+        
+        # 获取分类结果
+        ic_probs = labels.get('y_pred_proba', None)
+        ic_labels = labels.get('y_pred', None)
+        print("ic_labels",ic_labels)
+        print("ic_probs",ic_probs)
+        if ic_labels is None and 'labels' in labels:
+            ic_labels = labels['labels']
+        
+        # 识别伪影
+        self.eog_indices = []
+        if ic_labels is not None:
+            for i, label in enumerate(ic_labels):
+                # 只要不是brain或other信号，就认为是伪影
+                #if label not in ['brain', 'other']:
+                #if label not in ['brain']:
+                if label not in ['brain', 'other']:  # 保留 brain 和 other
+                    self.eog_indices.append(i)
+        
+        print(f"ICLabel识别到 {len(self.eog_indices)} 个伪影成分: {self.eog_indices}")
+        
+        return ic_probs, ic_labels
+
+
+
+
+
+    def classify(self, data, chan_names, srate, montage='emotiv_epoc'):
         """
         用 mne-icalabel 对当前窗口的ICA结果进行分类。
         输入:
@@ -422,7 +620,15 @@ class ORICAProcessor:
         # 1. 构造Raw对象
         info = mne.create_info(chan_names, srate, ch_types='eeg')
         raw = mne.io.RawArray(data, info)
-        raw.set_montage(montage)
+        
+        # 为 Emotiv EPOC 设备设置专门的 montage
+        if montage == 'emotiv_epoc':
+            try:
+                raw.set_montage(mne.channels.make_standard_montage("standard_1020"))
+            except ValueError:
+                self._setup_emotiv_epoc_montage(raw, chan_names)
+        else:
+            raw.set_montage(montage)
         raw.set_eeg_reference('average', projection=False)
         raw.filter(1., 100., fir_design='firwin')
 
@@ -453,7 +659,7 @@ class ORICAProcessor:
         return ic_probs, ic_labels
 
 
-    def classify_with_mne_ica(self, data, chan_names, srate, montage='standard_1020'):
+    def classify_with_mne_ica(self, data, chan_names, srate, montage='emotiv_epoc'):
         """
         用MNE自带的ICA分解+ICLabel分类，便于和ORICA hack结果对比。
         输入:
@@ -471,7 +677,15 @@ class ORICAProcessor:
 
         info = mne.create_info(chan_names, srate, ch_types='eeg')
         raw = mne.io.RawArray(data, info)
-        raw.set_montage(montage)
+        
+        # 为 Emotiv EPOC 设备设置专门的 montage
+        if montage == 'emotiv_epoc':
+            try:
+                raw.set_montage(mne.channels.make_standard_montage("standard_1020"))
+            except ValueError:
+                self._setup_emotiv_epoc_montage(raw, chan_names)
+        else:
+            raw.set_montage(montage)
         raw.set_eeg_reference('average', projection=False)
         raw.filter(1., 100., fir_design='firwin')
 
@@ -554,7 +768,7 @@ class ORICAProcessor:
         #print("y")
         return cleaned.T
 
-    def update_buffer(self, new_chunk):
+    def update_buffer_old(self, new_chunk):
         if self.data_buffer is None:
             self.data_buffer = new_chunk
         else:
@@ -571,3 +785,7 @@ class ORICAProcessor:
         #在stream_receiver.py,
         #if self.orica.update_buffer(chunk[self.channel_range, :]):
         #这句话判断为true
+
+    def update_buffer(self, new_chunk):
+        self.data_buffer = new_chunk
+        return True

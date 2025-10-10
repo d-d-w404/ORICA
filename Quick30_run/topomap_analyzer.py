@@ -56,44 +56,15 @@ class TopomapDataWorker(QThread):
 
                 
                 ch_names = self.receiver.channel_manager.get_labels_by_indices(self.receiver.channel_range)
+                info = mne.create_info(ch_names=ch_names, sfreq=self.receiver.srate, ch_types='eeg')
+                info.set_montage('standard_1020')
+
+
                 
-                # 过滤掉非EEG通道（如TRIGGER）
-                eeg_ch_names = []
-                for ch_name in ch_names:
-                    if ch_name not in ['TRIGGER', 'ExG 1', 'ExG 2'] and not ch_name.startswith('ExG'):
-                        eeg_ch_names.append(ch_name)
-                
-                if len(eeg_ch_names) == 0:
-                    print("⚠️ 没有有效的EEG通道，跳过topomap生成")
-                    time.sleep(self.interval_sec)
-                    continue
-                
-                info = mne.create_info(ch_names=eeg_ch_names, sfreq=self.receiver.srate, ch_types='eeg')
-                
-                try:
-                    info.set_montage('standard_1020')
-                except ValueError as e:
-                    print(f"⚠️ 设置导联失败: {e}")
-                    # 如果设置导联失败，尝试使用默认位置
-                    try:
-                        info.set_montage('standard_1020', on_missing='warn')
-                    except Exception as e2:
-                        print(f"⚠️ 使用默认导联也失败: {e2}")
-                        # 创建简单的圆形导联
-                        pos = np.random.rand(len(eeg_ch_names), 3) * 0.1
-                        info.set_montage(mne.channels.make_dig_montage(
-                            ch_pos=dict(zip(eeg_ch_names, pos)),
-                            coord_frame='head'
-                        ))
-                # 根据过滤后的通道数量调整mixing_matrix
-                if len(eeg_ch_names) != mixing_matrix.shape[0]:
-                    # 如果通道数量不匹配，需要重新计算mixing_matrix
-                    print(f"⚠️ 通道数量不匹配: mixing_matrix={mixing_matrix.shape}, 有效通道={len(eeg_ch_names)}")
-                    # 这里可以添加逻辑来重新计算mixing_matrix
-                    # 暂时跳过这次更新
-                    time.sleep(self.interval_sec)
-                    continue
-                
+
+
+                #self._setup_emotiv_epoc_montage(info, ch_names)
+
                 n_components = mixing_matrix.shape[1]
                 n_to_plot = min(self.n_components, n_components)
                 eog_indices = getattr(self.receiver, 'latest_eog_indices', None)
@@ -117,3 +88,43 @@ class TopomapDataWorker(QThread):
         self.running = False
         self.quit()
         self.wait() 
+
+    def _setup_emotiv_epoc_montage(self, info, chan_names):
+        """为 Emotiv EPOC 设备设置自定义 montage"""
+        # Emotiv EPOC 的电极位置（基于实际设备布局）
+        emotiv_positions = {
+            'AF3': [0.0, 0.5, 0.0],      # 前额
+            'F7': [-0.3, 0.3, 0.0],      # 左前额
+            'F3': [-0.2, 0.4, 0.0],      # 左前额
+            'FC5': [-0.4, 0.2, 0.0],     # 左前中央
+            'T7': [-0.5, 0.0, 0.0],      # 左颞
+            'P7': [-0.4, -0.2, 0.0],     # 左后颞
+            'O1': [-0.2, -0.4, 0.0],     # 左枕
+            'O2': [0.2, -0.4, 0.0],      # 右枕
+            'P8': [0.4, -0.2, 0.0],      # 右后颞
+            'T8': [0.5, 0.0, 0.0],       # 右颞
+            'FC6': [0.4, 0.2, 0.0],      # 右前中央
+            'F4': [0.2, 0.4, 0.0],       # 右前额
+            'F8': [0.3, 0.3, 0.0],       # 右前额
+            'AF4': [0.0, 0.5, 0.0]       # 前额
+        }
+        
+        # 如果通道名称不匹配，使用圆形排列
+        if len(chan_names) == 14:
+            # 创建圆形排列的电极位置
+            angles = np.linspace(0, 2*np.pi, 14, endpoint=False)
+            positions = np.column_stack([
+                np.cos(angles) * 0.4,  # x坐标
+                np.sin(angles) * 0.4,  # y坐标
+                np.zeros(14)           # z坐标
+            ])
+            
+            # 创建自定义 montage
+            montage = mne.channels.make_dig_montage(
+                ch_pos=dict(zip(chan_names, positions)),
+                coord_frame='head'
+            )
+            info.set_montage(montage)
+            print("✅ 已为 Emotiv EPOC 设置自定义圆形电极布局")
+        else:
+            print(f"⚠️ 通道数量 {len(chan_names)} 与 Emotiv EPOC 不匹配，使用默认布局")
