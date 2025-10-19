@@ -29,7 +29,8 @@ class TopomapDataWorker(QThread):
                 #mixing_matrix = np.linalg.pinv(self.receiver.orica.ica.get_W())
                 
                 #对W按照能量强度排序。
-                W_sorted= self.receiver.orica.sorted_W
+                #W_sorted= self.receiver.orica.sorted_W
+                W_sorted = self.receiver.orica.ica.get_icawinv()
                 mixing_matrix = np.linalg.pinv(W_sorted)
 
                 mixing_matrix2 = np.linalg.pinv(self.receiver.orica.ica.get_W())
@@ -56,8 +57,13 @@ class TopomapDataWorker(QThread):
 
                 
                 ch_names = self.receiver.channel_manager.get_labels_by_indices(self.receiver.channel_range)
+                print("ch_names:", ch_names)
+                #ch_names: ['Fp1', 'Fp2', 'AF3', 'AF4', 'F7', 'F8', 'F3', 'Fz', 'F4', 'FC5', 'FC6', 'T7', 'T8', 'C3', 'Cz', 'C4', 'CP5', 'CP6', 'P7', 'P8', 'P3', 'Pz', 'P4', 'PO8', 'PO3', 'PO4', 'O1', 'O2']
+
+                print("self.receiver.srate:", self.receiver.srate)
                 info = mne.create_info(ch_names=ch_names, sfreq=self.receiver.srate, ch_types='eeg')
-                info.set_montage('standard_1020')
+                #info.set_montage('standard_1020')
+                info.set_montage('standard_1020', on_missing='warn', match_case=False)
 
 
                 
@@ -66,7 +72,8 @@ class TopomapDataWorker(QThread):
                 #self._setup_emotiv_epoc_montage(info, ch_names)
 
                 n_components = mixing_matrix.shape[1]
-                n_to_plot = min(self.n_components, n_components)
+                # 显示全部成分
+                n_to_plot = n_components
                 eog_indices = getattr(self.receiver, 'latest_eog_indices', None)
                 
 

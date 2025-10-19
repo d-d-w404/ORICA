@@ -58,7 +58,7 @@ class TopomapWindow(QMainWindow):
         super().__init__()
         self.receiver = receiver
         self.base_figsize = (3.5, 3)  # 每个topomap的基础大小
-        self.columns_per_row = 4  # 每行4个topomap
+        self.columns_per_row = 6  # 每行6个topomap
         # 缓存变量
         self.cached_mixing_matrix = None
         self.cached_info = None
@@ -110,12 +110,17 @@ class TopomapWindow(QMainWindow):
         layout.addWidget(self.status_label)
         self.image_label = QLabel(self)
         self.image_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.image_label)
+        # 使用可滚动区域，防止行数过多显示不全
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setWidget(self.image_label)
+        layout.addWidget(self.scroll_area)
         central_widget.setLayout(layout)
         self.setCentralWidget(central_widget)
 
     def make_topomap_figure(self, receiver, n_components_to_plot):
-        """根据成分数量创建topomap图形"""
+        """根据成分数量创建topomap图形（这里改为显示全部成分并缩小子图尺寸）"""
         import mne
         import numpy as np
         fig = plt.figure(figsize=(12, 8))
@@ -133,14 +138,16 @@ class TopomapWindow(QMainWindow):
             info = mne.create_info(ch_names=ch_names, sfreq=receiver.srate, ch_types='eeg')
             info.set_montage('standard_1020')
             n_components = mixing_matrix.shape[1]
-            n_to_plot = min(n_components_to_plot, n_components)
+            # 显示全部IC
+            n_to_plot = n_components
             if n_to_plot <= 0:
                 return fig
-            if n_to_plot <= 2:
-                cols = n_to_plot
-            else:
-                cols = self.columns_per_row
+            # 每行固定列数（与界面配置一致）
+            cols = min(self.columns_per_row, max(1, n_to_plot))
             rows = (n_to_plot + cols - 1) // cols
+            # 根据格子数动态设定更紧凑的画布尺寸
+            per_size = 1.6  # 单个子图边长（英寸）
+            fig.set_size_inches(cols * per_size, max(1, rows) * per_size)
             axes = []
             for i in range(n_to_plot):
                 ax = fig.add_subplot(rows, cols, i + 1)
@@ -153,28 +160,21 @@ class TopomapWindow(QMainWindow):
                         axes=axes[i],
                         show=False,
                         cmap='RdBu_r',
-                        names=ch_names
+                        names=ch_names,
+                        outlines='head',
+                        contours=6
                     )
-                    axes[i].set_title(f'IC {i}', fontsize=12)
+                    axes[i].set_title(f'IC {i}', fontsize=8)
                     if (hasattr(receiver, 'latest_eog_indices') and 
                         receiver.latest_eog_indices is not None and 
                         i in receiver.latest_eog_indices):
-                        axes[i].set_title(f'IC {i} (EOG)', color='red', fontsize=12)
+                        axes[i].set_title(f'IC {i} (EOG)', color='red', fontsize=8)
                 except Exception as e:
                     print(f"❌ Topomap绘制错误: {e}")
                     continue
-            if cols == 1:
-                wspace = 0.0
-            elif cols == 2:
-                wspace = 0.1
-            else:
-                wspace = 0.3
-            if rows == 1:
-                hspace = 0.1
-            elif rows == 2:
-                hspace = 0.2
-            else:
-                hspace = 0.4
+            # 更紧凑的间距
+            wspace = 0.15
+            hspace = 0.2
             fig.subplots_adjust(
                 left=0.05,
                 right=0.95,

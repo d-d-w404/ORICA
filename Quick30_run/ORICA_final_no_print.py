@@ -1131,6 +1131,10 @@ class ORICA_final_new:
         """获取白化矩阵"""
         return self.whitening_matrix
 
+    def get_icawinv(self):
+        """获取ICA逆矩阵"""
+        return self.W @ self.whitening_matrix
+
     def evaluate_separation(self, Y):
         """评估分离效果 - 使用峰度"""
         k = kurtosis(Y, axis=0, fisher=False)

@@ -3,7 +3,7 @@ import time
 
 from pylsl import StreamInlet, resolve_byprop
 import numpy as np
-#from filter_utils import EEGSignalProcessor
+from filter_utils import EEGSignalProcessor
 
 from filter_utils_fir import example_usage
 from pylsl import resolve_streams
@@ -11,10 +11,12 @@ from orica_processor import ORICAProcessor
 from asrpy import ASR
 import mne
 from scipy.signal import medfilt
-
+from meegkit import asr
+import scipy.io
 
 import numpy as np
 from mne.filter import filter_data
+from FirFilter import rest_fir_filter
 
 class LSLStreamReceiver:
     def __init__(self, stream_type='EEG', time_range=5):
@@ -38,6 +40,7 @@ class LSLStreamReceiver:
         self.asr_calibrated = False
         self.asr_calibration_buffer = None
         self.prep_reference = None
+        self.asr_filter = None  # ✅ 存储已校准的ASR实例
 
         self.raw_buffer = None  # 存放未 ASR 的 bandpass-only 历史数据
         self.buffer_real = None
@@ -366,10 +369,21 @@ class LSLStreamReceiver:
             print("testin",chunk.shape) # test (14, 36)
             print("testin",chunk[0:3,0:3])
 
-            # Step 1: Bandpass or highpass filter
-            # chunk = EEGSignalProcessor.eeg_filter(chunk, self.srate, cutoff=self.cutoff)
-            # chunk,info = example_usage(chunk, self.srate)
 
+
+
+            # # ✅ 更新原始滤波后的数据接口
+            # self.last_unclean_chunk = chunk.copy()
+            # if self.raw_buffer is not None:
+            #     self.raw_buffer = np.roll(self.raw_buffer, -chunk.shape[1], axis=1)
+            #     self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
+
+
+            # Step 1: 使用 MNE 的专业 FIR 滤波器
+            chunk = self.apply_mne_iir_filter(chunk)
+            #chunk = self.apply_scipy_fir_filter(chunk)
+            # chunk = EEGSignalProcessor.eeg_filter(chunk, self.srate, cutoff=self.cutoff)
+            #chunk = rest_fir_filter(chunk, srate=self.srate, cutoff=self.cutoff)
 
             
             # filtered = filter_data(
@@ -394,11 +408,11 @@ class LSLStreamReceiver:
 
             # print("FIR filter out")
 
-            # ✅ 更新原始滤波后的数据接口
-            self.last_unclean_chunk = chunk.copy()
-            if self.raw_buffer is not None:
-                self.raw_buffer = np.roll(self.raw_buffer, -chunk.shape[1], axis=1)
-                self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
+            # # ✅ 更新原始滤波后的数据接口
+            # self.last_unclean_chunk = chunk.copy()
+            # if self.raw_buffer is not None:
+            #     self.raw_buffer = np.roll(self.raw_buffer, -chunk.shape[1], axis=1)
+            #     self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
 
 
             # # # ✅ 新增：CAR处理
@@ -468,6 +482,24 @@ class LSLStreamReceiver:
             # # 如果库支持分离噪声，可：
             # # clean_chunk, noise_chunk = asr.transform(chunk, return_noise=True)
             # # 你的后续处理...
+
+            #step 2: ASR
+            # ✅ 使用封装的 ASR 初始化函数（只在第一次调用时校准，之后直接复用）
+            if self.asr_filter is None:
+                self.initialize_asr_from_mat()
+            
+            # 应用 ASR 清理（如果已校准）
+            if self.asr_filter is not None:
+                chunk = self.asr_filter.transform(chunk)
+
+
+            # ✅ 更新原始滤波后的数据接口
+            self.last_unclean_chunk = chunk.copy()
+            if self.raw_buffer is not None:
+                self.raw_buffer = np.roll(self.raw_buffer, -chunk.shape[1], axis=1)
+                self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
+
+
 
 
             #✅ Step X: ORICA 去眼动伪影（重构为独立函数）
@@ -543,6 +575,156 @@ class LSLStreamReceiver:
             srate=self.srate
         )
         print("🔁 ORICA processor re-initialized with new channel range.")
+    
+    def apply_mne_fir_filter(self, data):
+        """
+        使用 MNE-Python 的专业 FIR 滤波器
+        专为 EEG 数据设计，效果更好
+        """
+        try:
+            from mne.filter import filter_data
+            
+            # 使用 MNE 的专业 FIR 滤波器（优化参数）
+            filtered_data = filter_data(
+                data=data,
+                sfreq=self.srate,
+                l_freq=self.cutoff[0],      # 低频截止
+                h_freq=self.cutoff[1],      # 高频截止
+                method='fir',               # 使用 FIR 滤波器
+                phase='zero-double',        # 零相位，双向滤波减少延迟
+                l_trans_bandwidth=0.25,     # 更窄的低频过渡带
+                h_trans_bandwidth=2.5,      # 更窄的高频过渡带
+                filter_length='10s',        # 固定滤波器长度，避免过长
+                fir_window='hamming',       # 使用 Hamming 窗
+                verbose=False
+            )
+            
+            print(f"✅ MNE FIR 滤波完成: {self.cutoff[0]}-{self.cutoff[1]} Hz")
+            return filtered_data
+            
+        except Exception as e:
+            print(f"❌ MNE FIR 滤波失败: {e}")
+            print("⚠️ 回退到原始数据")
+            return data
+
+    def apply_mne_iir_filter(self, data):
+        """
+        使用 MNE-Python 的 IIR 滤波器（备选方案）
+        延迟更小，适合实时处理
+        """
+        try:
+            from mne.filter import filter_data
+            
+            # 使用 IIR 滤波器，延迟更小
+            filtered_data = filter_data(
+                data=data,
+                sfreq=self.srate,
+                l_freq=self.cutoff[0],      # 低频截止
+                h_freq=self.cutoff[1],      # 高频截止
+                method='iir',               # 使用 IIR 滤波器
+                iir_params={'order': 4, 'ftype': 'butter'},  # 4阶 Butterworth
+                verbose=False
+            )
+            
+            print(f"✅ MNE IIR 滤波完成: {self.cutoff[0]}-{self.cutoff[1]} Hz")
+            return filtered_data
+            
+        except Exception as e:
+            print(f"❌ MNE IIR 滤波失败: {e}")
+            print("⚠️ 回退到原始数据")
+            return data
+
+    def apply_scipy_fir_filter(self, data):
+        """
+        使用 SciPy 的 FIR 滤波器（备选方案）
+        更轻量级，适合实时处理
+        """
+        try:
+            from scipy import signal
+            
+            # 设计 FIR 带通滤波器
+            nyquist = self.srate / 2
+            low = self.cutoff[0] / nyquist
+            high = self.cutoff[1] / nyquist
+            
+            # 使用 window 方法设计 FIR 滤波器
+            taps = signal.firwin(
+                numtaps=101,           # 滤波器长度
+                cutoff=[low, high],    # 截止频率
+                window='hann',         # 窗函数
+                pass_zero=False,       # 带通滤波器
+                scale=True
+            )
+            
+            # 应用滤波器
+            filtered_data = np.array([
+                signal.lfilter(taps, 1.0, ch) for ch in data
+            ])
+            
+            print(f"✅ SciPy FIR 滤波完成: {self.cutoff[0]}-{self.cutoff[1]} Hz")
+            return filtered_data
+            
+        except Exception as e:
+            print(f"❌ SciPy FIR 滤波失败: {e}")
+            print("⚠️ 回退到原始数据")
+            return data
+
+    def initialize_asr_from_mat(self, mat_file_path=r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_quick30.mat"):
+        """
+        从 MATLAB 文件加载校准数据并初始化 ASR（只执行一次）
+        
+        Args:
+            mat_file_path: 校准数据的 .mat 文件路径
+        """
+        if self.asr_filter is not None:
+            print("⏩ ASR 已校准，跳过重复初始化")
+            return self.asr_filter
+        
+        try:
+            from meegkit import asr
+            import scipy.io
+            
+            # 加载 MATLAB 文件
+            mat_data = scipy.io.loadmat(mat_file_path)
+            
+            # 提取校准数据（EEGLAB 格式）
+            calibration_data = None
+            if 'cleaned_data' in mat_data:
+                eeg_struct = mat_data['cleaned_data'][0, 0]
+                if 'data' in eeg_struct.dtype.names:
+                    calibration_data = eeg_struct['data']
+            elif 'data' in mat_data:
+                calibration_data = mat_data['data']
+            
+            if calibration_data is None:
+                print(f"❌ 无法提取校准数据，可用字段: {mat_data.keys()}")
+                return None
+            
+            # 转换为标准数组
+            calibration_data = np.asarray(calibration_data, dtype=np.float64)
+            print(f"✅ 校准数据加载成功 - 原始形状: {calibration_data.shape}")
+            
+            # 只选择当前使用的通道
+            if calibration_data.shape[0] != len(self.channel_range):
+                print(f"⚠️ 通道数不匹配：校准 {calibration_data.shape[0]} 通道，在线 {len(self.channel_range)} 通道")
+                calibration_data = calibration_data[self.channel_range, :]
+                print(f"✅ 已调整校准数据形状: {calibration_data.shape}")
+            
+            # 初始化并拟合 ASR
+            self.asr_filter = asr.ASR(
+                sfreq=self.srate,
+                cutoff=5,
+            )
+            self.asr_filter.fit(calibration_data)
+            print(f"✅ ASR 已校准完成，通道数: {calibration_data.shape[0]}")
+            
+            return self.asr_filter
+            
+        except Exception as e:
+            print(f"❌ ASR 初始化失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def start(self):
         """启动数据流和数据更新线程"""

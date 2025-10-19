@@ -54,8 +54,8 @@ class EEGGUI(QWidget):
         self.canvas = FigureCanvas(self.viewer.fig)
         main_layout.addWidget(self.canvas)
 
-        self.cutoff_input1 = QLineEdit("0.5")
-        self.cutoff_input2 = QLineEdit("45")
+        self.cutoff_input1 = QLineEdit("1")
+        self.cutoff_input2 = QLineEdit("50")
         cutoff_layout = QHBoxLayout()
         cutoff_layout.addWidget(QLabel("Lower Cutoff:"))
         cutoff_layout.addWidget(self.cutoff_input1)
@@ -232,7 +232,8 @@ class EEGGUI(QWidget):
             print(f"✅ 已更新滤波参数: cutoff = {self.receiver.cutoff}")
 
         except ValueError:
-            print("❌ Cutoff 值无效，使用默认值 (0.5, 45)")
+            print("❌ Cutoff 值无效，使用默认值 (1, 50)")
+            self.receiver.cutoff = (1, 50)
 
         # 设置是否启用 ASR（从复选框读取）
         if hasattr(self, 'asr_checkbox'):

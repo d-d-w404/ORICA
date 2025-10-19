@@ -6,8 +6,8 @@ from ORICA_enhanced import ORICAW
 from ORICA_REST_new import ORICAZ
 from ORICA_final import ORICA_final
 #from ORICA_final_new import ORICA_final_new
-from ORICA_final_no_print import ORICA_final_new
-#from ORICA_final_no_print_quick30 import ORICA_final_new
+#from ORICA_final_no_print import ORICA_final_new
+from ORICA_final_no_print_quick30 import ORICA_final_new
 # from ORICA_old import ORICA
 import numpy as np
 from scipy.signal import welch
@@ -358,21 +358,26 @@ class ORICAProcessor:
 
         # 在 fit 方法中：
         # 使用ORICA的sources进行ICLabel分类并识别伪影
-        A = np.linalg.pinv(self.ica.W)
 
-        ic_probs, ic_labels = None, None
-        if sources is not None and A is not None:
-            try:
-                ic_probs, ic_labels = self.classify_sources_directly(data,sources, A, chan_labels, srate,n_comp=self.n_components)
-            except Exception as e:
-                print(f"ICLabel分类失败: {e}")
+        
+        # A =self.ica.get_icawinv()
+        # #A = np.linalg.pinv(self.ica.W)
 
-        # 现在 self.eog_indices 已经包含了ICLabel识别的伪影
-        print(f"总伪影成分: {self.eog_indices}")
+        # ic_probs, ic_labels = None, None
+        # if sources is not None and A is not None:
+        #     try:
+        #         ic_probs, ic_labels = self.classify_sources_directly(data,sources,self.ica.get_icawinv() ,A, chan_labels, srate,n_comp=self.n_components)
 
-        # ✅ 记录最新的 ICLabel 结果
-        self.latest_ic_probs = ic_probs
-        self.latest_ic_labels = ic_labels
+        #         #ic_probs, ic_labels = self.classify_sources_directly(data,sources ,A, chan_labels, srate,n_comp=self.n_components)
+        #     except Exception as e:
+        #         print(f"ICLabel分类失败: {e}")
+
+        # # 现在 self.eog_indices 已经包含了ICLabel识别的伪影
+        # print(f"总伪影成分: {self.eog_indices}")
+
+        # # ✅ 记录最新的 ICLabel 结果
+        # self.latest_ic_probs = ic_probs
+        # self.latest_ic_labels = ic_labels
 
 
 
@@ -399,29 +404,34 @@ class ORICAProcessor:
             spectrum = {'freqs': freqs, 'powers': powers}
 
         #print("2")
-        # --- IC能量排序 ---
+        # --- IC能量排序（旧逻辑，现注释保留备用） ---
+        # if sources is not None:
+        #     # 计算每个IC的低频占比
+        #     ratios = []
+        #     for comp in sources:
+        #         fft_vals = np.abs(np.fft.rfft(comp))
+        #         freqs = np.fft.rfftfreq(comp.shape[0], 1 / self.srate)
+        #         low_freq_power = np.sum(fft_vals[(freqs >= 0.1) & (freqs <= 4)])
+        #         total_power = np.sum(fft_vals)
+        #         ratio = low_freq_power / (total_power + 1e-10)
+        #         ratios.append(ratio)
+        #     ratios = np.array(ratios)
+        #     # 按低频占比从大到小排序
+        #     self.sorted_idx = np.argsort(-ratios)
+        #     sources = sources[self.sorted_idx, :]
+        #     if A is not None:
+        #         A = A[:, self.sorted_idx]
+        #     # 对W排序并保存
+        #     if hasattr(self.ica, 'get_W'):
+        #         W = self.ica.get_W()
+        #         self.sorted_W = W[self.sorted_idx, :]
+
+        # --- 新逻辑：保持原始IC顺序 ---
         if sources is not None:
-            # 计算每个IC的低频占比
-            ratios = []
-            for comp in sources:
-                fft_vals = np.abs(np.fft.rfft(comp))
-                freqs = np.fft.rfftfreq(comp.shape[0], 1 / self.srate)
-                low_freq_power = np.sum(fft_vals[(freqs >= 0.1) & (freqs <= 4)])
-                total_power = np.sum(fft_vals)
-                ratio = low_freq_power / (total_power + 1e-10)
-                ratios.append(ratio)
-            ratios = np.array(ratios)
-            # 按低频占比从大到小排序
-            self.sorted_idx = np.argsort(-ratios)
-            sources = sources[self.sorted_idx, :]
-            #print("xxxxx",self.sorted_idx)
-            if A is not None:
-                A = A[:, self.sorted_idx]
-            # 对W排序并保存
-            #print("1")
+            self.sorted_idx = np.arange(sources.shape[0])
             if hasattr(self.ica, 'get_W'):
                 W = self.ica.get_W()
-                self.sorted_W = W[self.sorted_idx, :]
+                self.sorted_W = W
 
 
 
@@ -526,8 +536,173 @@ class ORICAProcessor:
         return ic_probs, ic_labels
 
 
+    def classify_sources_directly(self, data, sources, W, A, ch_names, srate,
+                                threshold=0.8, n_comp=None, montage="standard_1020",
+                                do_car=True, do_filter=True):
 
-    def classify_sources_directly(self, data,sources, mixing_matrix, chan_names, srate, threshold=0.8, n_comp=None):
+        print("classify")
+        print(data.shape)
+        print(srate)
+
+
+        n_channels = len(ch_names)
+        assert data.shape[0] == n_channels
+        n_components = A.shape[1]
+        assert A.shape[0] == n_channels
+        
+        # 0) Raw + 预处理
+        info = mne.create_info(ch_names=list(ch_names), sfreq=float(srate), ch_types="eeg")
+        raw = mne.io.RawArray(data, info)
+        #without car and filter, becasue which would not be corresponding to the sources
+
+        # 1) 设置 montage
+        raw.set_montage(montage)
+
+
+        # 1) 规范 W 形状
+        W_use = np.asarray(W, dtype=float)
+        if W_use.shape == (n_channels, n_channels):
+            W_use = W_use[:n_components, :]
+        assert W_use.shape == (n_components, n_channels)
+
+        # 2) 构造“已拟合”ICA 容器并注入
+        ica = ICA(n_components=n_components, method='picard',
+                fit_params=dict(extended=True, ortho=False), random_state=97)
+        A_use = np.asarray(A, dtype=float)
+
+        # —— 同时设置公开属性 + 私有字段（兼容不同版本）
+        ica.mixing_matrix_   = A_use.copy()
+        ica.unmixing_matrix_ = W_use.copy()
+        ica._mixing          = A_use.copy()
+        ica._unmixing        = W_use.copy()
+
+        ica.n_components_ = n_components
+        ica.ch_names = list(ch_names)
+        ica._ica_names = [f"IC {k:03d}" for k in range(n_components)]
+        ica.picks_ = np.arange(n_channels)
+        ica._ica_channel_names = list(ch_names)
+        ica.current_fit = 'raw'
+
+        # —— 补齐 PCA/白化占位，避免版本差异触发属性检查
+        ica.pca_mean_ = np.zeros(n_channels)
+        ica.pca_components_ = np.eye(n_channels)
+        ica.pca_explained_variance_ = np.ones(n_channels)
+        ica.pca_explained_variance_ratio_ = (
+            ica.pca_explained_variance_ / ica.pca_explained_variance_.sum()
+        )
+        ica._pre_whitener = np.ones((n_channels, 1))
+        ica._whitener = np.eye(n_channels)
+
+        # 3) ICLabel：返回 (labels, proba)
+        labels = label_components(raw, ica, method='iclabel')
+        print("labels",labels)
+        
+        # 获取分类结果
+        ic_probs = labels.get('y_pred_proba', None)
+        ic_labels = labels.get('y_pred', None)
+        print("ic_labels",ic_labels)
+        print("ic_probs",ic_probs)
+        if ic_labels is None and 'labels' in labels:
+            ic_labels = labels['labels']
+        
+        # 识别伪影
+        self.eog_indices = []
+        if ic_labels is not None:
+            for i, label in enumerate(ic_labels):
+                # 只要不是brain或other信号，就认为是伪影
+                #if label not in ['brain', 'other']:
+                #if label not in ['brain']:
+                if label not in ['brain', 'other']:  # 保留 brain 和 other
+                    self.eog_indices.append(i)
+
+
+        # ✅ 强制去除指定IC（例如：IC 0）
+        # 如需可配置，可改为读取外部列表或GUI参数
+        # if 4 not in self.eog_indices:
+        #     self.eog_indices.append(4)
+
+        # if 5 not in self.eog_indices:
+        #     self.eog_indices.append(5)
+
+        
+        #self.eog_indices.append(1)
+
+
+        
+        print(f"ICLabel识别到 {len(self.eog_indices)} 个伪影成分: {self.eog_indices}")
+        
+        return ic_probs, ic_labels
+       
+
+
+
+
+
+
+
+        
+        # # 构建 ICA 容器，并"注入" A
+        # print("n_comp",n_comp)
+        # ica = ICA(n_components=n_comp, method='infomax')
+        # ica.n_components_ = n_comp
+        # ica.current_fit = 'raw'  # ✅ 关键：设置为 'raw' 而不是 'unfitted'
+        # ica.ch_names = chan_names
+        # ica._ica_names = [f'IC {k:03d}' for k in range(n_comp)]
+        
+        # # 设置混合矩阵和分离矩阵
+        # ica.mixing_matrix_ = mixing_matrix
+        # ica.unmixing_matrix_ = np.linalg.pinv(mixing_matrix)
+        
+        # # ✅ 添加必要的属性，让ICLabel认为ICA已经拟合
+        # ica.pca_explained_variance_ = np.ones(n_comp)
+        # ica.pca_mean_ = np.zeros(len(chan_names))
+        # ica.pca_components_ = np.eye(n_comp, len(chan_names))
+    
+        
+        # # 直接使用ICLabel
+        # labels = label_components(raw, ica, method='iclabel')
+        # print("labels",labels)
+        
+        # # 获取分类结果
+        # ic_probs = labels.get('y_pred_proba', None)
+        # ic_labels = labels.get('y_pred', None)
+        # print("ic_labels",ic_labels)
+        # print("ic_probs",ic_probs)
+        # if ic_labels is None and 'labels' in labels:
+        #     ic_labels = labels['labels']
+        
+        # # 识别伪影
+        # self.eog_indices = []
+        # if ic_labels is not None:
+        #     for i, label in enumerate(ic_labels):
+        #         # 只要不是brain或other信号，就认为是伪影
+        #         #if label not in ['brain', 'other']:
+        #         #if label not in ['brain']:
+        #         if label not in ['brain', 'other']:  # 保留 brain 和 other
+        #             self.eog_indices.append(i)
+
+
+        # # ✅ 强制去除指定IC（例如：IC 0）
+        # # 如需可配置，可改为读取外部列表或GUI参数
+        # # if 4 not in self.eog_indices:
+        # #     self.eog_indices.append(4)
+
+        # # if 5 not in self.eog_indices:
+        # #     self.eog_indices.append(5)
+
+        
+        # self.eog_indices.append(1)
+
+
+        
+        # print(f"ICLabel识别到 {len(self.eog_indices)} 个伪影成分: {self.eog_indices}")
+        
+        # return ic_probs, ic_labels
+
+
+
+
+    def classify_sources_directlyy(self, data,sources, mixing_matrix, chan_names, srate, threshold=0.8, n_comp=None):
         """直接对sources进行ICLabel分类，不依赖MNE ICA，并识别伪影"""
         from mne_icalabel import label_components
         from mne.preprocessing import ICA
@@ -539,18 +714,20 @@ class ORICAProcessor:
         # 创建Raw对象
         info = mne.create_info(chan_names, srate, ch_types='eeg')
         raw = mne.io.RawArray(data, info)
+
+        raw.set_eeg_reference("average", projection=False)
         
         # 为 Emotiv EPOC 设备设置专门的 montage
         try:
             # 尝试使用 Emotiv EPOC 的专用 montage
-            self._setup_emotiv_epoc_montage(raw, chan_names)
-            #raw.set_montage(mne.channels.make_standard_montage("standard_1020"),on_missing='ignore',match_case=False)
+            #self._setup_emotiv_epoc_montage(raw, chan_names)
+            raw.set_montage(mne.channels.make_standard_montage("standard_1020"),on_missing='ignore',match_case=False)
             #raw.set_montage(mne.channels.make_standard_montage("standard_1020"))
             #raw.set_montage(mne.channels.make_standard_montage("emotiv"))
         except ValueError:
             # 如果失败，创建 Emotiv EPOC 的自定义 montage
-            self._setup_emotiv_epoc_montage(raw, chan_names)
-            #raw.set_montage(mne.channels.make_standard_montage("standard_1020"),on_missing='ignore',match_case=False)
+            #self._setup_emotiv_epoc_montage(raw, chan_names)
+            raw.set_montage(mne.channels.make_standard_montage("standard_1020"),on_missing='ignore',match_case=False)
             #raw.set_montage(mne.channels.make_standard_montage("emotiv"))
 
         
@@ -586,19 +763,107 @@ class ORICAProcessor:
         
         # 识别伪影
         self.eog_indices = []
-        if ic_labels is not None:
-            for i, label in enumerate(ic_labels):
-                # 只要不是brain或other信号，就认为是伪影
-                #if label not in ['brain', 'other']:
-                #if label not in ['brain']:
-                if label not in ['brain', 'other']:  # 保留 brain 和 other
-                    self.eog_indices.append(i)
+        # if ic_labels is not None:
+        #     for i, label in enumerate(ic_labels):
+        #         # 只要不是brain或other信号，就认为是伪影
+        #         #if label not in ['brain', 'other']:
+        #         #if label not in ['brain']:
+        #         if label not in ['brain', 'other']:  # 保留 brain 和 other
+        #             self.eog_indices.append(i)
+
+
+        # ✅ 强制去除指定IC（例如：IC 0）
+        # 如需可配置，可改为读取外部列表或GUI参数
+        # if 4 not in self.eog_indices:
+        #     self.eog_indices.append(4)
+
+        # if 5 not in self.eog_indices:
+        #     self.eog_indices.append(5)
+
+        
+        self.eog_indices.append(1)
+
+
         
         print(f"ICLabel识别到 {len(self.eog_indices)} 个伪影成分: {self.eog_indices}")
         
         return ic_probs, ic_labels
 
 
+    def classify_sources_directlyxx(self, data, sources, mixing_matrix, chan_names, srate,
+                                threshold=0.8, n_comp=None, use_mne_builtin=True):
+        """
+        直接用你已有的 mixing_matrix(A) + data(X) 构造 ICA 容器，调用 ICLabel。
+        data: 传感器级数据 X (n_chan x n_times), 单位 V
+        sources: 可忽略（MNE会用 W@X 计算），若没有 X，可先 X = A @ sources
+        mixing_matrix: A (n_chan x n_comp)
+        """
+        import mne
+        import numpy as np
+        from mne.preprocessing import ICA
+
+        # 1) 构造 Raw
+        info = mne.create_info(chan_names, srate, ch_types='eeg')
+        raw = mne.io.RawArray(data, info)
+
+        # 2) 设置 montage（优先你的自定义 Emotiv 坐标）
+        try:
+            #self._setup_emotiv_epoc_montage(raw, chan_names)  # 你自己的函数：写入坐标
+            std = mne.channels.make_standard_montage("standard_1020")
+            raw.set_montage(std, on_missing='warn')
+        except Exception as e:
+            print(f"[warn] Emotiv montage failed: {e} -> fallback to standard_1020")
+            std = mne.channels.make_standard_montage("standard_1020")
+            raw.set_montage(std, on_missing='warn')
+
+        raw.set_eeg_reference("average", projection=False)
+
+        # 3) 构造 ICA 容器（不fit，直接注入矩阵）
+        A = np.asarray(mixing_matrix)
+        n_chan = len(chan_names)
+        if n_comp is None:
+            n_comp = A.shape[1]
+        assert A.shape == (n_chan, n_comp), f"A shape must be (n_chan, n_comp), got {A.shape}"
+
+        ica = ICA(n_components=n_comp, method='infomax', random_state=97, max_iter='auto')
+        ica.n_components_ = int(n_comp)
+        ica.current_fit = 'raw'
+        ica.ch_names = list(chan_names)
+        ica._ica_names = [f'IC {k:03d}' for k in range(n_comp)]
+
+        ica.mixing_matrix_ = A
+        ica.unmixing_matrix_ = np.linalg.pinv(A)
+
+        # 可不设这些“伪”PCA属性，避免形状不一致
+        # ica.pca_explained_variance_ = np.ones(n_comp)
+        # ica.pca_mean_ = np.zeros(n_chan)
+        # ica.pca_components_ = np.eye(n_comp, n_chan)
+
+        # 4) 调用 ICLabel
+        if use_mne_builtin:
+            # 推荐：使用 MNE 内置（mne>=1.3）
+            from mne.preprocessing.iclabel import label_components
+            labels, probs = label_components(raw, ica, method='iclabel')
+        else:
+            # 兼容老版本：mne-icalabel
+            from mne_icalabel import label_components
+            labels, probs = label_components(raw, ica, method='iclabel')
+
+        print("labels:", labels[:10], " ...")
+        print("probs shape:", probs.shape)
+
+        # 5) 依据概率做伪影判定（可配合 threshold）
+        classes = ['brain','muscle','eye','heart','line_noise','channel_noise','other']
+        cid = {c:i for i,c in enumerate(classes)}
+        # 强伪影示例：eye/muscle/line_noise 概率 > 阈值
+        bad_mask = (probs[:, cid['eye']] > threshold) | \
+                (probs[:, cid['muscle']] > threshold) | \
+                (probs[:, cid['line_noise']] > threshold)
+
+        self.eog_indices = np.where(bad_mask)[0].tolist()
+        print(f"ICLabel识别到 {len(self.eog_indices)} 个伪影成分: {self.eog_indices}")
+
+        return probs, labels
 
 
 

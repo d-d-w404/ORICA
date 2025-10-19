@@ -16,7 +16,8 @@ class ORICA_final_new:
                  use_rls_whitening=False, forgetting_factor=0.98, 
                  nonlinearity='gaussian', block_size_ica=1, block_size_white=8,
                  ff_profile='cooling', tau_const=3, gamma=0.6, lambda_0=0.995,
-                 num_subgaussian=0, eval_convergence=True, verbose=False, srate=500):
+                 num_subgaussian=0, eval_convergence=True, verbose=False, srate=500,
+                 time_perm=False):
         """
         ORICA with RLS whitening support - 基于MATLAB orica.m实现
         
@@ -36,6 +37,7 @@ class ORICA_final_new:
             num_subgaussian: 次高斯源数量
             eval_convergence: 是否评估收敛性
             verbose: 是否输出详细信息
+            time_perm: 是否对数据进行时间打乱（减少时间相关性）
         """
         self.n_components = n_components
         self.learning_rate = learning_rate
@@ -49,6 +51,9 @@ class ORICA_final_new:
         # 块更新参数
         self.block_size_ica = block_size_ica
         self.block_size_white = block_size_white
+        
+        # 时间打乱参数
+        self.time_perm = time_perm
         
         # 遗忘因子参数
         self.ff_profile = ff_profile
@@ -741,7 +746,7 @@ class ORICA_final_new:
             Q = Q * signs
 
             state = {
-                'icasphere': np.eye(nChs),                 # 初始白化矩阵为随机正交矩阵
+                'icasphere': Q,                 # ✅ 修复：使用随机正交矩阵 Q（之前错误地用了 np.eye）
                 'icaweights': np.eye(nChs),     # 初始ICA权重矩阵仍用单位阵
                 'counter': 0
             }
@@ -859,6 +864,17 @@ class ORICA_final_new:
         print("icaweights",state['icaweights'][0:3,0:3])
         print("data.shape",data.shape)
         print("data",data[0:3,0:3])
+        
+        # ===== 时间打乱（Time Permutation）- 对应 MATLAB 的 options.timeperm =====
+        # 目的：随机打乱数据时间顺序，减少时间相关性，帮助 ICA 更好地收敛
+        if self.time_perm:
+            # 生成随机排列索引（对应 MATLAB: permIdx = randperm(nPts)）
+            perm_idx = np.random.permutation(nPts)
+            print("🔀 启用时间打乱（Time Permutation）")
+        else:
+            # 不打乱，使用顺序索引（对应 MATLAB: permIdx = 1:nPts）
+            perm_idx = np.arange(nPts)
+            print("➡️ 不使用时间打乱，保持原始时间顺序")
 
 
 
@@ -922,9 +938,14 @@ class ORICA_final_new:
                 # if verbose and bi % 10 == 0:
                 #     pass
                 print("oricain40")
-                print("mixtures[:, data_range].shape",mixtures[:, data_range].shape)
-                print("mixtures[:, data_range]",mixtures[:, data_range][0:3,0:3])
+                
+                # ✅ 应用时间打乱索引（对应 MATLAB: Mixtures(:, permIdx(dataRange))）
+                perm_data_range = perm_idx[data_range]  # 获取打乱后的索引
+                
+                print("mixtures[:, perm_data_range].shape",mixtures[:, perm_data_range].shape)
+                print("mixtures[:, perm_data_range]",mixtures[:, perm_data_range][0:3,0:3])
                 print("data_range",data_range)
+                print("perm_data_range",perm_data_range[:10] if len(perm_data_range) > 10 else perm_data_range)
 
                 print("state['icasphere'].shape",state['icasphere'].shape)
                 print("state['icasphere']",state['icasphere'][0:3,0:3])
@@ -935,7 +956,8 @@ class ORICA_final_new:
                 print("lambda_0",lambda_0)
 
                 # save_txt("3.txt",data[:, data_range])
-                state=self.dynamic_orica_cooling(mixtures[:, data_range], data_range+1, state, gamma, lambda_0)
+                # ✅ 使用打乱后的数据索引
+                state=self.dynamic_orica_cooling(mixtures[:, perm_data_range], data_range+1, state, gamma, lambda_0)
                 
                 # countxxx=0
                 # #print("data[:, data_range].shape",data[:, data_range].shape)
@@ -1138,6 +1160,10 @@ class ORICA_final_new:
     def get_whitening_matrix(self):
         """获取白化矩阵"""
         return self.whitening_matrix
+
+    def get_icawinv(self):
+        """获取ICA逆矩阵"""
+        return self.W @ self.whitening_matrix
 
     def evaluate_separation(self, Y):
         """评估分离效果 - 使用峰度"""
