@@ -1111,48 +1111,6 @@ class ORICA_final_new:
         return X
 
 
-    def transform_old(self, X):
-        """变换数据"""
-        try:
-            if not self.whitened:
-                raise ValueError("Model must be initialized first with `initialize()`.")
-            
-            # 检查数据长度
-            if X.shape[0] < 1:
-                print(f"⚠️ 变换数据长度不足: {X.shape[0]}")
-                return X
-            
-            # 检查维度匹配
-            if self.mean is not None and self.mean.shape[0] != X.shape[1]:
-                print(f"⚠️ 均值维度不匹配: 期望{X.shape[1]}，实际{self.mean.shape[0]}")
-                # 重新计算均值
-                self.mean = np.mean(X, axis=0)
-            
-            # 去均值
-            if self.mean is not None:
-                X = X - self.mean
-            
-            # 白化
-            if self.use_rls_whitening:
-                # 使用当前的白化矩阵
-                X_whitened = X @ self.whitening_matrix.T
-            else:
-                # 传统白化
-                X_whitened = X @ self.whitening_matrix.T
-            
-            # ICA变换
-            Y = (self.W @ X_whitened.T).T
-            return Y
-        except Exception as e:
-            print(f"⚠️ transform失败: {e}")
-            return X
-
-    def inverse_transform_old(self, Y):
-        """逆变换"""
-        Xw = np.linalg.pinv(self.W) @ Y.T
-        X = Xw.T @ np.linalg.pinv(self.whitening_matrix).T + self.mean
-        return X
-
     def get_W(self):
         """获取解混矩阵"""
         return self.W
@@ -1164,6 +1122,10 @@ class ORICA_final_new:
     def get_icawinv(self):
         """获取ICA逆矩阵"""
         return self.W @ self.whitening_matrix
+
+    def get_sources(self):
+        """获取源信号"""
+        return self.sources
 
     def evaluate_separation(self, Y):
         """评估分离效果 - 使用峰度"""

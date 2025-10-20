@@ -18,7 +18,7 @@ class ChannelSelectorDialog(QDialog):
         self.channel_info = self.receiver.channel_manager.channels
 
         # 当前选中的 index 列表
-        current_range = set(self.receiver.channel_range)
+        current_range = set(self.receiver.chan_range)
 
         for ch in self.channel_info:
             cb = QCheckBox(ch["label"])

@@ -187,7 +187,7 @@ class LSLStreamVisualizer:
 from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
 import time
-from stream_receiver import LSLStreamReceiver
+from receiver import LSLStreamReceiver
 import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.collections import LineCollection

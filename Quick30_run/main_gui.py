@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 
-from stream_receiver import LSLStreamReceiver, ChannelManager
+from receiver import LSLStreamReceiver, ChannelManager
 from bandpower_analysis import analyze_bandpower
 from attention_estimator import RealTimeAttentionEstimator
 from viewer import LSLStreamVisualizer
@@ -33,16 +33,17 @@ import mne
 class EEGGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Real-time EEG Viewer")
-        self.setGeometry(100, 100, 1000, 700)
-
         # ========== Function Parts ==========
         self.receiver = LSLStreamReceiver()
         self.viewer = LSLStreamVisualizer(self.receiver)
         self.regressor = RealTimeRegressor(gui=self)
 
 
-        # ========== 创建 Tab 界面 ==========
+        # ========== 创建窗口 ==========
+        self.setWindowTitle("Real-time EEG Viewer")
+        self.setGeometry(100, 100, 1000, 700)
+
+        
         self.tabs = QTabWidget()
         self.tab_main = QWidget()
         self.tab_bandpower = QWidget()
@@ -74,9 +75,6 @@ class EEGGUI(QWidget):
         self.asr_checkbox = QCheckBox("Enable ASR (pyPREP)")
         main_layout.addWidget(self.asr_checkbox)
 
-        # ✅ 新增：CAR复选框
-        self.car_checkbox = QCheckBox("Enable CAR (Common Average Reference)")
-        main_layout.addWidget(self.car_checkbox)
 
         # attention display
         self.att_label = QLabel("attention_level")
@@ -240,10 +238,6 @@ class EEGGUI(QWidget):
             self.receiver.use_asr = self.asr_checkbox.isChecked()
             print(f"{'✅ 启用' if self.receiver.use_asr else '❌ 关闭'} ASR 处理")
   
-        # ✅ 新增：设置是否启用 CAR
-        if hasattr(self, 'car_checkbox'):
-            self.receiver.use_car = self.car_checkbox.isChecked()
-            print(f"{'✅ 启用' if self.receiver.use_car else '❌ 关闭'} CAR 处理")
 
     def update_prediction_display(self, pred):
         self.pred_label.setText(f"🎯 预测情绪强度: {pred:.3f}")
