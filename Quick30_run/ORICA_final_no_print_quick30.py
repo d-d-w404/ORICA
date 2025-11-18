@@ -117,37 +117,38 @@ class ORICA_final_new:
             print(f"✅ 调整n_components为{self.n_components}")
         
         print("initialize")
-        #data = scipy.io.loadmat(r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_20251001_163725.mat")
-        data = scipy.io.loadmat(r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_20251008_030649.mat")
+        # #data = scipy.io.loadmat(r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_20251001_163725.mat")
+        # data = scipy.io.loadmat(r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_20251008_030649.mat")
         
-        cleaned_data = data['cleaned_data']
-        # 获取所有字段名
-        field_names = cleaned_data.dtype.names
-        print(f"字段名: {field_names}")
+        # cleaned_data = data['cleaned_data']
+        # # 获取所有字段名
+        # field_names = cleaned_data.dtype.names
+        # print(f"字段名: {field_names}")
 
-        # 尝试访问icaweights和icasphere
-        try:
-            icaweights = cleaned_data[0, 0]['icaweights']
-            print(f"\nicaweights 类型: {type(icaweights)}")
-            print(f"icaweights 形状: {icaweights.shape}")
-            print(f"icaweights 内容: {icaweights[0:3,0:3]}")
-            self.W = icaweights
+        # # 尝试访问icaweights和icasphere
+        # try:
+        #     icaweights = cleaned_data[0, 0]['icaweights']
+        #     print(f"\nicaweights 类型: {type(icaweights)}")
+        #     print(f"icaweights 形状: {icaweights.shape}")
+        #     print(f"icaweights 内容: {icaweights[0:3,0:3]}")
+        #     self.W = icaweights
             
-            icasphere = cleaned_data[0, 0]['icasphere']
-            print(f"\nicasphere 类型: {type(icasphere)}")
-            print(f"icasphere 形状: {icasphere.shape}")
-            print(f"icasphere 内容: {icasphere[0:3,0:3]}")
-            self.whitening_matrix = icasphere
+        #     icasphere = cleaned_data[0, 0]['icasphere']
+        #     print(f"\nicasphere 类型: {type(icasphere)}")
+        #     print(f"icasphere 形状: {icasphere.shape}")
+        #     print(f"icasphere 内容: {icasphere[0:3,0:3]}")
+        #     self.whitening_matrix = icasphere
             
-        except Exception as e:
-            print(f"访问字段时出错: {e}")
+        # except Exception as e:
+        #     print(f"访问字段时出错: {e}")
 
-        # self.W = data["icaweights"]
-        # self.whitening_matrix = data["icasphere"]
-        # print(data)
-        # print("self.W",self.W)
-        # print("self.whitening_matrix",self.whitening_matrix.shape)
+        # # self.W = data["icaweights"]
+        # # self.whitening_matrix = data["icasphere"]
+        # # print(data)
+        # # print("self.W",self.W)
+        # # print("self.whitening_matrix",self.whitening_matrix.shape)
         print("initialize done")
+        self.whitening_matrix = np.eye(self.n_components)
         # try:
         #     # 去均值
         #     #X_init = self._center(X_init)

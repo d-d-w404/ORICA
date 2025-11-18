@@ -348,7 +348,7 @@ class LSLStreamVisualizer:
 
 
     def start(self):
-        self.receiver.start()
+        #self.receiver.start()
         # 用同步更新器 + blit
         self.ani = FuncAnimation(
             self.fig,

@@ -4,7 +4,44 @@ import numpy as np
 import mne
 from pylsl import StreamInfo, StreamOutlet
 
-SET_FILE = r"D:\LaparoscopicTrainingEEGData\EEG data-20250520T175836Z-1-001\EEG data\laparoscopic_003_EEGmerged.set"  # ← 替换为你的 .set
+#SET_FILE = r"D:\LaparoscopicTrainingEEGData\EEG data-20250520T175836Z-1-001\EEG data\laparoscopic_003_EEGmerged.set"  # ← 替换为你的 .set
+#SET_FILE = r"D:\work\matlab_project\Lap_data2\00_rawdata\laparoscopic_1307_EEGmerged.set"
+
+
+
+
+
+
+#
+# #001 asr
+# SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_001_EEGasr.set"
+
+# #003 asr
+# SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_003_EEGasr.set"
+
+# #1271 asr
+# SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1271_EEGasr.set"
+
+# #1284 asr
+# SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1284_EEGasr.set"
+
+
+# #1285 asr
+# SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1295_EEGasr.set"
+# #
+#
+# #1295 asr
+# SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1295_EEGasr.set"
+#
+# #1307 asr
+# SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1307_EEGasr.set"
+#
+# #1309 asr
+# SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1309_EEGasr.set"
+
+#1311 asr
+SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1311_EEGasr.set"
+
 #SET_FILE =r"D:\work\matlab_project\REST\data\Quick30_Shawn_EyeOpen.set"
 #SET_FILE = r"D:\LaparoscopicTrainingEEGData\Preprocessed Data-20250520T174502Z-1-001\Preprocessed Data\laparoscopic_001_EEGiclabel24Chans.set"
 #SET_FILE = r"D:\LaparoscopicTrainingEEGData\EEG data-20250520T175836Z-1-001\EEG data\EEG data05_processed_data\laparoscopic_001_EEGasr.set"

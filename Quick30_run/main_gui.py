@@ -53,7 +53,7 @@ class EEGGUI(QWidget):
         # ========== 主界面 Tab ==========
         main_layout = QVBoxLayout()
         self.canvas = FigureCanvas(self.viewer.fig)
-        main_layout.addWidget(self.canvas)
+        main_layout.addWidget(self.canvas) 
 
         self.cutoff_input1 = QLineEdit("1")
         self.cutoff_input2 = QLineEdit("50")
@@ -195,6 +195,7 @@ class EEGGUI(QWidget):
 
     def start_stream(self):
         self.update_filter_params()
+        self.receiver.start()
         self.viewer.start()
         self.canvas.draw()
 

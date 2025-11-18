@@ -29,13 +29,13 @@ class EEGNetPretrainer:
         
         # 模型参数
         self.n_channels = None  # 将从数据中自动获取
-        self.input_time_length = 1000  # 2秒 * 500Hz
+        self.input_time_length = None  # 将从数据中自动获取
         self.n_classes = None  # 将从数据中自动获取
         
         # 训练参数
         self.learning_rate = 5e-4
         self.batch_size = 8
-        self.epochs = 300
+        self.epochs = 200
         self.validation_split = 0.15
         
         # 训练历史
@@ -64,6 +64,7 @@ class EEGNetPretrainer:
             # 自动设置模型参数
             self.n_channels = X.shape[1]  # 通道数
             self.n_classes = len(np.unique(y))  # 类别数
+            self.input_time_length = X.shape[2]  # 自动从数据获取时间长度
             
             print(f"🔧 Model parameters set:")
             print(f"   Channels: {self.n_channels}")
@@ -116,7 +117,7 @@ class EEGNetPretrainer:
     
     def create_model(self):
         """创建EEGNet模型"""
-        if self.n_channels is None or self.n_classes is None:
+        if self.n_channels is None or self.n_classes is None or self.input_time_length is None:
             print("❌ Model parameters not set. Please load data first.")
             return False
         
@@ -355,11 +356,164 @@ def main():
     # 创建预训练器
     trainer = EEGNetPretrainer()
     
-    # 数据路径
-    data_path = './Quick30/labeled_raw_eeg_data_listen_processed.npz'
-    model_save_path = './Quick30/eegnet_pretrained_model_listen_processed.pt'
-    plot_save_path = './Quick30/training_history.png'
-    
+
+
+
+
+    # SUBJECT_ID = '001'
+    # # 数据路径
+    # # noverlap after orica 2s
+    # data_path = rf'./Quick30/train_data/data_after_orica_npz_nooverlap/eegnet_data_{SUBJECT_ID}_after_orica.npz'
+    # model_save_path = rf'./Quick30/train_result_after_orica_nooverlap/eegnet_{SUBJECT_ID}_after_orica.pt'
+    # plot_save_path = rf'./Quick30/train_result_after_orica_nooverlap/training_history_{SUBJECT_ID}_after_orica.png'
+
+
+    # SUBJECT_ID = '001'
+    # # 数据路径
+    # #  after orica
+    # data_path = rf'./Quick30/train_data/data_after_orica_npz/eegnet_data_{SUBJECT_ID}_after_orica.npz'
+    # model_save_path = rf'./Quick30/train_result_after_orica/eegnet_{SUBJECT_ID}_after_orica.pt'
+    # plot_save_path = rf'./Quick30/train_result_after_orica/training_history_{SUBJECT_ID}_after_orica.png'
+
+
+    # SUBJECT_ID = '001'
+    # # 数据路径
+    # # noverlap after orica 1s
+    # data_path = rf'./Quick30/train_data/data_after_orica_npz_nooverlap_1s/eegnet_data_{SUBJECT_ID}_after_orica.npz'
+    # model_save_path = rf'./Quick30/train_result_after_orica_nooverlap_1s/eegnet_{SUBJECT_ID}_after_orica.pt'
+    # plot_save_path = rf'./Quick30/train_result_after_orica_nooverlap_1s/training_history_{SUBJECT_ID}_after_orica.png'
+
+
+
+
+    # # 003 after orica
+    # data_path = './Quick30/train_data/data_after_orica_npz/eegnet_data_003_after_orica.npz'
+    # model_save_path = './Quick30/eegnet_003_after_orica.pt'
+    # plot_save_path = './Quick30/training_history_003_after_orica.png'
+
+    # # 1271 after orica
+    # data_path = './Quick30/train_data/data_after_orica_npz/eegnet_data_1271_after_orica.npz'
+    # model_save_path = './Quick30/eegnet_1271_after_orica.pt'
+    # plot_save_path = './Quick30/training_history_1271_after_orica.png'
+
+    # # 1284 after orica
+    # data_path = './Quick30/train_data/data_after_orica_npz/eegnet_data_1284_after_orica.npz'
+    # model_save_path = './Quick30/eegnet_1284_after_orica.pt'
+    # plot_save_path = './Quick30/training_history_1284_after_orica.png'
+
+    # # 1295 after orica
+    # data_path = './Quick30/train_data/data_after_orica_npz/eegnet_data_1295_after_orica.npz'
+    # model_save_path = './Quick30/eegnet_1295_after_orica.pt'
+    # plot_save_path = './Quick30/training_history_1295_after_orica.png'
+
+
+
+    # # 1307 after orica
+    # data_path = './Quick30/train_data/data_after_orica_npz/eegnet_data_1307_after_orica.npz'
+    # model_save_path = './Quick30/eegnet_1307_after_orica.pt'
+    # plot_save_path = './Quick30/training_history_1307_after_orica.png'
+
+
+    # # # 1309 after orica
+    # data_path = './Quick30/train_data/data_after_orica_npz/eegnet_data_1309_after_orica.npz'
+    # model_save_path = './Quick30/eegnet_1309_after_orica.pt'
+    # plot_save_path = './Quick30/training_history_1309_after_orica.png'
+
+    # # 1311 after orica
+    # data_path = './Quick30/train_data/data_after_orica_npz/eegnet_data_1311_after_orica.npz'
+    # model_save_path = './Quick30/eegnet_1311_after_orica.pt'
+    # plot_save_path = './Quick30/training_history_1311_after_orica.png'
+
+    #------------------------after orica con--------------------------------
+
+    SUBJECT_ID = '1307'
+
+    # # nooverlap after orica con 2s
+    data_path = rf'./Quick30/train_data/data_after_con_orica_nooverlap/eegnet_data_{SUBJECT_ID}_with_labels.npz'
+    model_save_path = rf'./Quick30/train_result_after_con_orica_nooverlap/eegnet_{SUBJECT_ID}_after_orica_con.pt'
+    plot_save_path = rf'./Quick30/train_result_after_con_orica_nooverlap/training_history_{SUBJECT_ID}_after_orica.png'
+
+
+    # SUBJECT_ID = '1307'
+
+    # # # nooverlap after orica con 1s
+    # data_path = rf'./Quick30/train_data/data_after_con_orica_nooverlap_1s/eegnet_data_{SUBJECT_ID}_with_labels.npz'
+    # model_save_path = rf'./Quick30/train_result_after_con_orica_nooverlap_1s/eegnet_{SUBJECT_ID}_after_orica_con.pt'
+    # plot_save_path = rf'./Quick30/train_result_after_con_orica_nooverlap_1s/training_history_{SUBJECT_ID}_after_orica.png'
+
+
+
+    # SUBJECT_ID = '001'
+    # # # #after orica con
+    # data_path = './Quick30/train_data/data_after_con_orica/eegnet_data_001_with_labels.npz'
+    # model_save_path = './Quick30/train_result_after_con_orica/eegnet_001_after_orica_con.pt'
+    # plot_save_path = './Quick30/train_result_after_con_orica/training_history_001_after_orica_con.png'
+
+    # # # # # 003  after orica con
+    # data_path = './Quick30/train_data/data_after_con_orica/eegnet_data_003_with_labels.npz'
+    # model_save_path = './Quick30/eegnet_003_after_orica_con.pt'
+    # plot_save_path = './Quick30/training_history_003_after_orica_con.png'
+
+
+    # # # # 1271  after orica con
+    # data_path = './Quick30/train_data/data_after_con_orica/eegnet_data_1271_with_labels.npz'
+    # model_save_path = './Quick30/eegnet_1271_after_orica_con.pt'
+    # plot_save_path = './Quick30/training_history_1271_after_orica_con.png'
+
+
+    # # # # # 1284  after orica con
+    # data_path = './Quick30/train_data/data_after_con_orica/eegnet_data_1284_with_labels.npz'
+    # model_save_path = './Quick30/eegnet_1284_after_orica_con.pt'
+    # plot_save_path = './Quick30/training_history_1284_after_orica_con.png'
+
+
+    # # # 1295  after orica con
+    #data_path = './Quick30/train_data/data_after_con_orica/eegnet_data_1295_with_labels.npz'
+    # model_save_path = './Quick30/eegnet_1295_after_orica_con.pt'
+    # plot_save_path = './Quick30/training_history_1295_after_orica_con.png'
+
+
+    # # # 1307  after orica con
+    #data_path = './Quick30/train_data/data_after_con_orica/eegnet_data_1307_with_labels.npz'
+    # model_save_path = './Quick30/eegnet_1307_after_orica_con.pt'
+    # plot_save_path = './Quick30/training_history_1307_after_orica_con.png'
+
+
+    # # # # 1309  after orica con
+    # data_path = './Quick30/train_data/data_after_con_orica/eegnet_data_1309_with_labels.npz'
+    # model_save_path = './Quick30/eegnet_1309_after_orica_con.pt'
+    # plot_save_path = './Quick30/training_history_1309_after_orica_con.png'
+
+
+    # # # # # # 1311  after orica con
+    # data_path = './Quick30/train_data/data_after_con_orica/eegnet_data_1311_with_labels.npz'
+    # model_save_path = './Quick30/eegnet_1311_after_orica_con.pt'
+    # plot_save_path = './Quick30/training_history_1311_after_orica_con.png'
+
+
+    #------------------------after orica con-------------------------------
+
+
+
+
+    # multi after orica
+    # data_path = './Quick30/train_data/eegnet_data_multi_subjects.npz'
+    # model_save_path = './Quick30/eegnet_after_orica_multi.pt'
+    # plot_save_path = './Quick30/training_history_after_orica_multi.png'
+
+
+    # # 1307  before orica
+    # data_path = './Quick30/train_data/eegnet_data_1307_before_orica.npz'
+    # model_save_path = './Quick30/eegnet_1307_before_orica.pt'
+    # plot_save_path = './Quick30/training_history_1307_before_orica.png'
+
+    # # # 1307  after amica
+    # data_path = './Quick30/train_data/eegnet_data_1307_after_amica.npz'
+    # model_save_path = './Quick30/eegnet_1307_after_amica.pt'
+    # plot_save_path = './Quick30/training_history_1307_after_amica.png'
+
+
+
     # 1. 加载和预处理数据
     X, y = trainer.load_and_preprocess_data(data_path)
     if X is None:

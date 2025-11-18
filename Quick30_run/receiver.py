@@ -18,7 +18,6 @@ import scipy.io
 
 from mne.filter import filter_data
 from FirFilter import rest_fir_filter
-
 #this class to some extent is like a container which includs all of the paraments(orica, icalabel)
 class LSLStreamReceiver:
     def __init__(self, stream_type='EEG', time_range=5, stream_name='mybrain'):
@@ -34,41 +33,41 @@ class LSLStreamReceiver:
 
         # buffer 
         self.time_range = time_range #control the buffer size by sec
-        self.raw_buffer = None  # this buffer currently only used for vis(before orica)
-        self.buffer = None#this buffer currently only used for vis(after orica)
-        self.pair_buffer = None# conbining two bufer above
-        
+        self.raw_buffer = None  
+        self.buffer = None
+        self.pair_buffer = None
+
+        # chunk (currently I use chunk for vis, because it's more small than buffer, making the vis smooth)
+        # chunk size is not a fixed value
+        self.last_unclean_chunk = None  # this chunk currently only used for vis(before orica)
+        self.last_processed_chunk = None  #this chunk currently only used for vis(after orica)
+        self.chunk_pairs = []  # conbining two chunk above
 
         #IIR
         self.cutoff = (1, 50)
 
         # ASR
         self.use_asr = False
-        self.asr_calibrated = False
-        self.asr_calibration_buffer = None
-        self.prep_reference = None
-        self.asr_filter = None  # ✅ 存储已校准的ASR实例
-
-        
-
-        #ORICA
-        #ICLabel
-        self.latest_ic_probs = None
-        self.latest_ic_labels = None
-
-
-        
-
-        # ✅ 移除callback机制，改为纯数据接口模式
-        # self.analysis_callbacks = []  # 存放所有回调分析函数
-
-        # ✅ 新增：CAR设置
-        self.use_car = False  # 是否启用CAR
+        self.asr_filter = None
+        # values for online asr calibration
+        self.asr_calibration_data = None 
+        self.asr_calibration_size = 0
 
         #ORICA
         self.orica = None
         self.latest_sources = None
+
+        #ICLabel
+        self.latest_ic_probs = None
+        self.latest_ic_labels = None
         self.latest_eog_indices = None
+        
+        # 简单的10秒数据收集
+        self.calibration_data = None
+        self.calibration_size = 0
+        self.calibration_duration = 10  # 10秒
+        self.calibration_collected = False
+        
 
 
         #当我在切换通道的过程中，会让ic的个数发生改变，但是此时buffer还在运行，会导致卡死，
@@ -79,17 +78,12 @@ class LSLStreamReceiver:
         self.data_update_thread = None
         self.is_running = False
         self.update_interval = 0.1  # 100ms更新间隔
-        
-        # ✅ 新增：数据接口相关
-        self.last_unclean_chunk = None  # 最新的原始数据块
-        self.last_processed_chunk = None  # 最新的处理后数据块
 
-        #用于画图时，保证处理后的数据和处理前的能够在时间上吻合
-        self.chunk_pairs = []  # [(timestamp, unclean, processed)]
+
 
 
     def find_and_open_stream(self):
-        # 1) check all available streams
+        # ========================1) check all available streams===============================
         streams = resolve_streams()
         print("Current available LSL streams:")
         for i, stream in enumerate(streams):
@@ -97,7 +91,7 @@ class LSLStreamReceiver:
                 f"[{i}] Name: {stream.name()}, Type: {stream.type()}, Channels: {stream.channel_count()}, ID: {stream.source_id()}")
         print(f"Searching for LSL stream with type = '{self.stream_type}'...")
 
-        # 2) select the stream by type or name
+        # ========================2) select the stream by type or name===============================
         '''
         # useing the stream_type to filter the stream, 
         # but sometimes there are serveral streams with the same type, 
@@ -112,7 +106,7 @@ class LSLStreamReceiver:
             raise RuntimeError(f"No LSL stream with type '{self.stream_type}' and name '{self.stream_name}' found.")
 
 
-        # 3)generate basic info of the stream
+        # ========================3)generate basic info of the stream===============================
         self.inlet = StreamInlet(streams[0])
         info = self.inlet.info()
         self.channel_manager = ChannelManager(info)
@@ -120,20 +114,27 @@ class LSLStreamReceiver:
         self.nbchan = info.channel_count()
 
         # remove some of the useless or broken channels
+        #exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC','Oz','PO8',"F7","T8",'FC5','F8']#,'F7','F8'
         exclude = ['TRIGGER', 'ACC34','ACC33','ACC32', 'Packet Counter', 'ExG 2','ExG 1','ACC']#,'F7','F8'
         self.chan_labels = self.channel_manager.get_labels_excluding_keywords(exclude)
         self.chan_range = self.channel_manager.get_indices_excluding_keywords(exclude)
-
         self.nbchan = len(self.chan_range)
 
         # 4) buffer for visualization
         self.buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
         self.raw_buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
 
+        #buffer for asr calibration
+        #self.asr_calibration_data = np.zeros((info.channel_count(), self.srate * 40))
+        self.asr_calibration_data = np.zeros((len(self.chan_range), self.srate * 40))
+        
+        # 初始化10秒校准数据缓冲区
+        self.calibration_data = np.zeros((len(self.chan_range), self.srate * self.calibration_duration))
+
         print(f"Stream opened: {info.channel_count()} channels at {self.srate} Hz")
         print(f"Using {self.nbchan} EEG channels: {self.chan_labels}")
 
-        # 5) init ORICA
+        # ========================5) init ORICA===============================
         self.reinitialize_orica()
 
 
@@ -143,7 +144,6 @@ class LSLStreamReceiver:
         use the orica_processor.py to modify the chunk data
         """
         cleaned_chunk = chunk.copy()
-        # ORICA处理
         if self.orica is not None:
             if self.orica.update_buffer(chunk[self.chan_range, :]):
                 sources, eog_indices, ic_probs, ic_labels= self.orica.fit(self.orica.data_buffer, self.chan_range, self.chan_labels, self.srate)
@@ -156,7 +156,7 @@ class LSLStreamReceiver:
         return cleaned_chunk, sources, eog_indices
 
     def pull_and_update_buffer(self):
-
+        # ========================1) pull data from the stream===============================
         # this samples_random mean the number of samples is random, which depends on the system situation(no control)
         # this timestamps are the time of every random samples
         samples_random, timestamps = self.inlet.pull_chunk(timeout=0.0)
@@ -170,28 +170,43 @@ class LSLStreamReceiver:
         samples_random = np.array(samples_random).T
         samples=samples_random
 
+
+        # ========================2) process the data===============================
         '''
         timestampes sometime is (0,), which means there is no data, the if will not execute.
         timestampes sometime is (samples_size,0), which means there is data, the if will execute.
         '''
         if timestamps:
-            chunk = np.array(samples)  # shape: (channels, samples)这里的samples的大小是不固定的
+            chunk = np.array(samples)  # shape: (channels, samples)samples size is not a fixed value
 
+            raw_chunk = chunk.copy()
+            raw_chunk = raw_chunk[self.chan_range, :]
 
+            # # 简单的10秒数据收集
+            # if not self.calibration_collected:
+            #     self._collect_10s_data(raw_chunk)
+            #     return  # 收集期间跳过后续处理
 
-
-            # Step 1: use the professional FIR filter from MNE
-            chunk = self.apply_mne_iir_filter(chunk)
-
+            # Step 1: Apply Common Average Reference (CAR)
+            #chunk = self.apply_car_rereference(chunk)
             
-            #step 2: ASR
-            # asr calibration
+            # Step 2: use the professional FIR filter from MNE
+            chunk = self.apply_mne_iir_filter(chunk)
+   
+
+
+            #step 2: ASR with offline calibration
+            #asr calibration
             if self.asr_filter is None:
                 self.initialize_asr_from_mat()
             # asr usage
             if self.asr_filter is not None:
                 chunk = self.asr_filter.transform(chunk)
 
+
+
+
+                
 
             # Step 3: ORICA artifact removal
             # update chunk for visualization before ORICA
@@ -202,6 +217,7 @@ class LSLStreamReceiver:
                 self.raw_buffer = np.roll(self.raw_buffer, -chunk.shape[1], axis=1)
                 self.raw_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
 
+
             # ORICA processing
             chunk, ica_sources, eog_indices = self.process_orica(chunk)
             if ica_sources is not None:
@@ -209,29 +225,42 @@ class LSLStreamReceiver:
             if eog_indices is not None:
                 self.latest_eog_indices = eog_indices
 
+            #ASR with online calibration
+            if not self.use_asr:
+                # 如果正在进行在线校准，收集数据
+                if self.asr_calibration_size < self.srate * 40:
+                    print("collecting asr data")
+                    if self.asr_calibration_data is not None:
+                        self.asr_calibration_data = np.roll(self.asr_calibration_data, -raw_chunk.shape[1], axis=1)
+                        self.asr_calibration_data[:, -raw_chunk.shape[1]:] = raw_chunk
+                        self.asr_calibration_size += raw_chunk.shape[1]
+                # 如果ASR已校准且启用，则使用ASR处理
+                elif self.asr_calibration_size >= self.srate * 40:
+                    print("init asr")
+                    self.initialize_asr_online(self.asr_calibration_data)
+                    self.use_asr = True
+            elif self.use_asr:
+                print("using asr")
+                chunk[self.chan_range, :] = self.asr_filter.transform(chunk[self.chan_range, :])
 
 
             # update chunk for visualization after ORICA
             self.last_processed_chunk = chunk.copy()
+            
             
             # update buffer after ORICA
             num_new = chunk.shape[1]
             self.buffer = np.roll(self.buffer, -num_new, axis=1)
             self.buffer[:, -num_new:] = chunk
 
-            
 
-
-
-            
-            # update chunk pairs for visualization
+            #Step 4: update chunk pairs for visualization
             # this step is used for keeping the vis looks synced
             # becasue the ORICA takes some time which would cause the data before and after ORICA looks not synced
             timestamp = time.time()
             self.chunk_pairs.append((timestamp, self.last_unclean_chunk, self.last_processed_chunk))
             if len(self.chunk_pairs) > 1:
                 self.chunk_pairs.pop(0)
-
             self.pair_buffer = (self.raw_buffer, self.buffer)
 
 
@@ -242,19 +271,15 @@ class LSLStreamReceiver:
     #Selected channel indices: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
     #Selected channel labels: ['AF7', 'Fpz', 'F7', 'Fz', 'T7', 'FC6', 'F4', 'C4', 'Oz', 'CP6', 'Cz', 'PO8', 'CP5', 'O2', 'O1', 'P3', 'P4', 'P7', 'P8', 'Pz', 'PO7', 'T8', 'C3', 'Fp2', 'F3', 'F8', 'FC5', 'AF8']
     #上面就是channel_range和channel_labels的格式，要调用函数就传入这样的list
+    #channel_selector.py use this function to update the channel range and labels
     def set_channel_range_and_labels(self, new_range, new_labels):
         with self.lock:
             self.chan_range = new_range
             self.chan_labels = new_labels
             self.nbchan = len(new_range)
             self.reinitialize_orica()
-            print(f"🔁 通道更新: {self.chan_labels}")
+            print(f"channel range and labels updated: {self.chan_labels}")
 
-
-    def register_analysis_callback(self, callback_fn):
-        """注册一个函数用于处理每次更新后的数据段 chunk"""
-        # self.analysis_callbacks.append(callback_fn) # 移除此行
-        pass # 移除此行
 
     def reinitialize_orica(self):
         self.orica = ORICAProcessor(
@@ -263,33 +288,73 @@ class LSLStreamReceiver:
         )
         print("🔁 ORICA processor re-initialized with new channel range.")
     
-    def apply_mne_iir_filter(self, data):
+    def apply_car_rereference(self, data):
         """
-        使用 MNE-Python 的 IIR 滤波器（备选方案）
-        延迟更小，适合实时处理
+        应用平均参考 (Common Average Reference)
+        
+        Args:
+            data: EEG数据 (channels, samples)
+        
+        Returns:
+            重参考后的数据 (channels, samples) - 通道数不变
         """
         try:
-            from mne.filter import filter_data
+            # 计算所有通道的平均值作为参考
+            ref_signal = np.mean(data, axis=0, keepdims=True)
+            # 每个通道减去参考信号
+            reref_data = data - ref_signal
+            print(f"✅ CAR重参考完成: {data.shape[0]} 通道")
+            return reref_data
             
-            # 使用 IIR 滤波器，延迟更小
+        except Exception as e:
+            print(f"❌ CAR重参考失败: {e}")
+            print("⚠️ 返回原始数据")
+            return data
+
+    def apply_mne_iir_filter(self, data):
+        try:     
             filtered_data = filter_data(
                 data=data,
                 sfreq=self.srate,
-                l_freq=self.cutoff[0],      # 低频截止
-                h_freq=self.cutoff[1],      # 高频截止
-                method='iir',               # 使用 IIR 滤波器
-                iir_params={'order': 4, 'ftype': 'butter'},  # 4阶 Butterworth
+                l_freq=self.cutoff[0],      # low frequency cutoff
+                h_freq=self.cutoff[1],      # high frequency cutoff
+                method='iir',               # apply IIR filter
+                iir_params={'order': 4, 'ftype': 'butter'},  # 4th order Butterworth
                 verbose=False
             )
-            
-            print(f"✅ MNE IIR 滤波完成: {self.cutoff[0]}-{self.cutoff[1]} Hz")
+            print(f"✅ MNE IIR filter finished: {self.cutoff[0]}-{self.cutoff[1]} Hz")
             return filtered_data
-            
         except Exception as e:
-            print(f"❌ MNE IIR 滤波失败: {e}")
-            print("⚠️ 回退到原始数据")
+            print(f"❌ MNE IIR filter failed: {e}")
+            print("⚠️ revert to original data")
             return data
 
+
+    def _collect_10s_data(self, raw_chunk):
+        """
+        收集10秒数据
+        
+        Args:
+            raw_chunk: 原始数据块 (channels, samples)
+        """
+        chunk_size = raw_chunk.shape[1]
+        
+        # 检查是否还有空间存储更多数据
+        if self.calibration_size + chunk_size <= self.calibration_data.shape[1]:
+            # 将新数据添加到校准缓冲区
+            self.calibration_data[:, self.calibration_size:self.calibration_size + chunk_size] = raw_chunk
+            self.calibration_size += chunk_size
+            
+            # 显示进度
+            progress = self.calibration_size / (self.srate * self.calibration_duration)
+            print(f"📊 收集进度: {progress:.1%} ({self.calibration_size / self.srate:.1f}/{self.calibration_duration}秒)")
+            
+            # 检查是否收集完成
+            if self.calibration_size >= self.srate * self.calibration_duration:
+                print("✅ 10秒数据收集完成！")
+                self.calibration_collected = True
+        else:
+            print("⚠️ 校准数据缓冲区已满")
 
     def initialize_asr_from_mat(self, mat_file_path=r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_quick30.mat"):
         """
@@ -303,8 +368,8 @@ class LSLStreamReceiver:
             return self.asr_filter
         
         try:
-            from meegkit import asr
-            import scipy.io
+
+
             
             # 加载 MATLAB 文件
             mat_data = scipy.io.loadmat(mat_file_path)
@@ -347,6 +412,50 @@ class LSLStreamReceiver:
             import traceback
             traceback.print_exc()
             return None
+
+    def initialize_asr_online(self,calibration_data_raw):
+        """
+        从 MATLAB 文件加载校准数据并初始化 ASR（只执行一次）
+        
+        Args:
+            mat_file_path: 校准数据的 .mat 文件路径
+        """
+        if self.asr_filter is not None:
+            print("⏩ ASR 已校准，跳过重复初始化")
+            return self.asr_filter
+        
+        try:
+
+
+            
+            
+            # 转换为标准数组
+            print("will get in")
+            calibration_data = np.asarray(calibration_data_raw, dtype=np.float64)
+            print(f"✅ 校准数据加载成功 - 原始形状: {calibration_data.shape}")
+            
+            # 只选择当前使用的通道
+            if calibration_data.shape[0] != len(self.chan_range):
+                print(f"⚠️ 通道数不匹配：校准 {calibration_data.shape[0]} 通道，在线 {len(self.chan_range)} 通道")
+                calibration_data = calibration_data[self.chan_range, :]
+                print(f"✅ 已调整校准数据形状: {calibration_data.shape}")
+            
+            # 初始化并拟合 ASR
+            self.asr_filter = asr.ASR(
+                sfreq=self.srate,
+                cutoff=5,
+            )
+            self.asr_filter.fit(calibration_data)
+            print(f"✅ ASR 已校准完成，通道数: {calibration_data.shape[0]}")
+            
+            return self.asr_filter
+            
+        except Exception as e:
+            print(f"❌ ASR 初始化失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
 
     def start(self):
         """启动数据流和数据更新线程"""
@@ -429,6 +538,147 @@ class LSLStreamReceiver:
         return (self.last_unclean_chunk is not None and 
                 self.last_processed_chunk is not None and 
                 self.buffer is not None)
+    
+    def get_calibration_data(self):
+        """获取收集到的10秒校准数据"""
+        if self.calibration_collected:
+            return self.calibration_data[:, :self.calibration_size].copy()
+        return None
+    
+    def is_calibration_completed(self):
+        """检查10秒数据收集是否完成"""
+        return self.calibration_collected
+    
+    def process_calibration_data(self):
+        """
+        对收集到的10秒数据依次执行IIR、CAR、ASR、ORICA处理
+        返回每一步处理后的数据和最终的icaweight、icasphere
+        """
+        if not self.calibration_collected:
+            print("❌ 校准数据收集未完成，无法处理")
+            return None
+        
+        try:
+            print("🔄 开始处理10秒校准数据...")
+            
+            # 获取收集到的原始数据
+            raw_data = self.calibration_data[:, :self.calibration_size]
+            print(f"📊 原始数据形状: {raw_data.shape}")
+            
+            # Step 1: CAR (Common Average Reference)
+            print("🔄 执行CAR重参考...")
+            car_data = self.apply_car_rereference(raw_data)
+            print(f"✅ CAR完成，数据形状: {car_data.shape}")
+            
+            # Step 2: IIR滤波
+            print("🔄 执行IIR滤波...")
+            iir_data = self.apply_mne_iir_filter(car_data)
+            print(f"✅ IIR滤波完成，数据形状: {iir_data.shape}")
+            
+            # Step 3: ASR处理
+            print("🔄 执行ASR处理...")
+            asr_data = self._apply_asr_to_calibration_data(iir_data)
+            print(f"✅ ASR处理完成，数据形状: {asr_data.shape}")
+            
+            # Step 4: ORICA处理
+            print("🔄 执行ORICA处理...")
+            orica_results = self._apply_orica_to_calibration_data(asr_data)
+            
+            if orica_results is not None:
+                ica_weight, ica_sphere, sources, eog_indices = orica_results
+                print(f"✅ ORICA处理完成")
+                print(f"📊 ICA Weight形状: {ica_weight.shape}")
+                print(f"📊 ICA Sphere形状: {ica_sphere.shape}")
+                print(f"📊 源信号形状: {sources.shape}")
+                print(f"📊 识别到 {len(eog_indices) if eog_indices else 0} 个伪影成分")
+                
+                # 返回所有处理结果
+                return {
+                    'raw_data': raw_data,
+                    'car_data': car_data,
+                    'iir_data': iir_data,
+                    'asr_data': asr_data,
+                    'ica_weight': ica_weight,
+                    'ica_sphere': ica_sphere,
+                    'sources': sources,
+                    'eog_indices': eog_indices
+                }
+            else:
+                print("❌ ORICA处理失败")
+                return None
+                
+        except Exception as e:
+            print(f"❌ 校准数据处理失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _apply_asr_to_calibration_data(self, iir_data):
+        """
+        对IIR滤波后的数据应用ASR处理
+        
+        Args:
+            iir_data: IIR滤波后的数据 (channels, samples)
+        
+        Returns:
+            asr_data: ASR处理后的数据 (channels, samples)
+        """
+        try:
+            # 创建ASR滤波器
+            asr_filter = asr.ASR(
+                sfreq=self.srate,
+                cutoff=5,
+            )
+            
+            # 使用IIR数据拟合ASR
+            asr_filter.fit(iir_data)
+            
+            # 应用ASR处理
+            asr_data = asr_filter.transform(iir_data)
+            
+            return asr_data
+            
+        except Exception as e:
+            print(f"❌ ASR处理失败: {e}")
+            return iir_data  # 如果ASR失败，返回原始IIR数据
+    
+    def _apply_orica_to_calibration_data(self, asr_data):
+        """
+        对ASR处理后的数据应用ORICA处理
+        
+        Args:
+            asr_data: ASR处理后的数据 (channels, samples)
+        
+        Returns:
+            tuple: (ica_weight, ica_sphere, sources, eog_indices) 或 None
+        """
+        try:
+            # 创建临时ORICA处理器
+            temp_orica = ORICAProcessor(
+                n_components=len(self.chan_range),
+                srate=self.srate
+            )
+            
+            # 执行ORICA拟合
+            sources, eog_indices, ic_probs, ic_labels = temp_orica.fit(
+                asr_data, self.chan_range, self.chan_labels, self.srate
+            )
+            
+            if sources is not None and temp_orica.ica is not None:
+                # 获取ICA weight和sphere参数
+                ica_weight = temp_orica.ica.get_W()
+                ica_sphere = temp_orica.ica.get_sphere()
+                
+                return ica_weight, ica_sphere, sources, eog_indices
+            else:
+                print("⚠️ ORICA未产生有效结果")
+                return None
+                
+        except Exception as e:
+            print(f"❌ ORICA处理失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
 
     def print_latest_channel_values(self):
