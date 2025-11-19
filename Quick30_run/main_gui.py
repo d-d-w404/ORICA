@@ -26,7 +26,7 @@ from topomap_visualizer import TopomapWindow
 from bandpower_analyzer import BandpowerAnalyzer
 from attention_analyzer import AttentionAnalyzer
 
-from channel_selector import ChannelSelectorDialog
+from channel_selector_gui import ChannelSelectorDialog
 from pretrain_online_learning import PretrainOnlineLearning
 
 import mne

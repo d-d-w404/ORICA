@@ -1,7 +1,6 @@
 import numpy as np
 from scipy.stats import kurtosis
 from sklearn.feature_selection import mutual_info_regression
-from ORICA_calibration import ORICACalibration
 from scipy.linalg import sqrtm
 import scipy
 
