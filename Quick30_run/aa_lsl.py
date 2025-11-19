@@ -34,13 +34,17 @@ from pylsl import StreamInfo, StreamOutlet
 # SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1295_EEGasr.set"
 #
 # #1307 asr
-# SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1307_EEGasr.set"
+#SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1307_EEGasr.set"
 #
 # #1309 asr
 # SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1309_EEGasr.set"
 
 #1311 asr
-SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1311_EEGasr.set"
+#SET_FILE = r"D:\work\matlab_project\Lap_data2\05_processed_data\laparoscopic_1311_EEGasr.set"
+
+
+# eye open
+SET_FILE=r"D:\work\matlab_project\REST_original\data\Quick30_Shawn_EyeOpen.set"
 
 #SET_FILE =r"D:\work\matlab_project\REST\data\Quick30_Shawn_EyeOpen.set"
 #SET_FILE = r"D:\LaparoscopicTrainingEEGData\Preprocessed Data-20250520T174502Z-1-001\Preprocessed Data\laparoscopic_001_EEGiclabel24Chans.set"

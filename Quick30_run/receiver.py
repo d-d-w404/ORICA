@@ -197,11 +197,11 @@ class LSLStreamReceiver:
 
             #step 2: ASR with offline calibration
             #asr calibration
-            if self.asr_filter is None:
-                self.initialize_asr_from_mat()
-            # asr usage
-            if self.asr_filter is not None:
-                chunk = self.asr_filter.transform(chunk)
+            # if self.asr_filter is None:
+            #     self.initialize_asr_from_mat()
+            # # asr usage
+            # if self.asr_filter is not None:
+            #     chunk = self.asr_filter.transform(chunk)
 
 
 
