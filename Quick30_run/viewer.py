@@ -251,16 +251,18 @@ class LSLStreamVisualizer:
         self.ax.set_ylim(-self.data_scale, self.offsets[-1] + self.data_scale)
         self.ax.set_xlim(0, 1)
 
-        # 先用零数据占位：2*n_ch 段（前 n_ch: raw，后 n_ch: clean）
+        # 先用零数据占位：3*n_ch 段（raw → ASR → ORICA 最终）
         zeros = np.zeros((self.n_ch, 1), dtype=float)
-        seg_raw_init   = self._make_segments(self.x, zeros + self.offsets[:, None])
-        seg_clean_init = self._make_segments(self.x, zeros + self.offsets[:, None])
-        segments_init  = np.concatenate([seg_raw_init, seg_clean_init], axis=0)
+        base = zeros + self.offsets[:, None]
+        seg_raw_init = self._make_segments(self.x, base)
+        seg_asr_init = self._make_segments(self.x, base)
+        seg_orica_init = self._make_segments(self.x, base)
+        segments_init = np.concatenate([seg_raw_init, seg_asr_init, seg_orica_init], axis=0)
 
-        # 每段的样式
-        colors      = (['red']  * self.n_ch) + (['blue'] * self.n_ch)
-        linestyles  = (['--']   * self.n_ch) + (['solid']* self.n_ch)
-        linewidths  = ([0.4]    * self.n_ch) + ([0.6]   * self.n_ch)
+        # 红虚线 raw，绿实线 ASR，蓝实线 ORICA（与 receiver.buffer 一致）
+        colors = (['red'] * self.n_ch) + (['tab:green'] * self.n_ch) + (['blue'] * self.n_ch)
+        linestyles = (['--'] * self.n_ch) + (['solid'] * self.n_ch) + (['solid'] * self.n_ch)
+        linewidths = ([0.4] * self.n_ch) + ([0.5] * self.n_ch) + ([0.6] * self.n_ch)
 
         # 关键：只用一个 LineCollection（一个艺术家）
         self.lc = LineCollection(
@@ -293,44 +295,43 @@ class LSLStreamVisualizer:
         # clean_data = self.receiver.get_buffer_data('processed')
         # raw_data   = self.receiver.get_buffer_data('raw')
 
-        # 2) update_plot_synced 里，原子读取（替换原来的两次 get_buffer_data 调用）
-        raw_data,clean_data  = self.receiver.get_pair_data()
+        # get_pair_data 与 receiver.pair_buffer 一致：(raw_buffer, asr_buffer, buffer) → 红 / 绿 / 蓝
+        raw_data, asr_data, orica_data = self.receiver.get_pair_data()
 
-        # print("clean_data",clean_data.shape)
-        # print("raw_data",raw_data.shape)
-
-
-
-        if clean_data is None or raw_data is None:
+        if orica_data is None or raw_data is None:
             return [self.lc]
+        if asr_data is None:
+            asr_data = orica_data.copy()
 
         # 降采样与去均值
         ds = max(1, int(self.receiver.srate / self.sampling_rate))
         if ds != getattr(self, 'ds', ds):
             self.ds = ds
-        clean_data = clean_data[:, ::self.ds]
-        raw_data   = raw_data[:,   ::self.ds]
-        clean_data = clean_data - np.mean(clean_data, axis=1, keepdims=True)
-        raw_data   = raw_data   - np.mean(raw_data,   axis=1, keepdims=True)
+        orica_data = orica_data[:, ::self.ds]
+        raw_data = raw_data[:, ::self.ds]
+        asr_data = asr_data[:, ::self.ds]
+        orica_data = orica_data - np.mean(orica_data, axis=1, keepdims=True)
+        raw_data = raw_data - np.mean(raw_data, axis=1, keepdims=True)
+        asr_data = asr_data - np.mean(asr_data, axis=1, keepdims=True)
 
         # 对齐长度
-        min_len = min(clean_data.shape[1], raw_data.shape[1])
+        min_len = min(orica_data.shape[1], raw_data.shape[1], asr_data.shape[1])
         if min_len <= 1:
             return [self.lc]
-        clean_data = clean_data[:, -min_len:]
-        raw_data   = raw_data[:,   -min_len:]
+        orica_data = orica_data[:, -min_len:]
+        raw_data = raw_data[:, -min_len:]
+        asr_data = asr_data[:, -min_len:]
 
-        # 添加偏移（副本）
-        clean_disp = clean_data + self.offsets[:, None]
-        raw_disp   = raw_data   + self.offsets[:, None]
+        raw_disp = raw_data + self.offsets[:, None]
+        asr_disp = asr_data + self.offsets[:, None]
+        orica_disp = orica_data + self.offsets[:, None]
 
-        # 时间轴（样本编号；若用秒：/self.sampling_rate）
         x = np.arange(min_len, dtype=float)
 
-        # 构造两组段并合并为一个集合（顺序：raw 段 + clean 段）
-        seg_raw   = self._make_segments(x, raw_disp)
-        seg_clean = self._make_segments(x, clean_disp)
-        segments  = np.concatenate([seg_raw, seg_clean], axis=0)
+        seg_raw = self._make_segments(x, raw_disp)
+        seg_asr = self._make_segments(x, asr_disp)
+        seg_orica = self._make_segments(x, orica_disp)
+        segments = np.concatenate([seg_raw, seg_asr, seg_orica], axis=0)
 
         # 同一帧内只更新这“一位艺术家”
         self.lc.set_segments(segments)

@@ -70,7 +70,7 @@ class TopomapDataWorker(QThread):
 
 
                 #self._setup_emotiv_epoc_montage(info, ch_names)
-                n_components = 8
+                n_components = 20
                 #n_components = mixing_matrix.shape[1]
                 # 显示全部成分
                 n_to_plot = n_components

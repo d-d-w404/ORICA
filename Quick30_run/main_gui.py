@@ -40,8 +40,28 @@ class EEGGUI(QWidget):
 
 
         # ========== 创建窗口 ==========
-        self.setWindowTitle("Real-time EEG Viewer")
-        self.setGeometry(100, 100, 1000, 700)
+        # 从环境变量获取实例ID，用于区分多个实例
+        import os
+        instance_id_str = os.environ.get('EEG_GUI_INSTANCE', '1')
+        instance_id = int(instance_id_str)
+        
+        # 根据实例ID设置不同的窗口标题
+        if instance_id == 1:
+            window_title = "Real-time EEG Viewer - Method 1 (IIR)"
+        elif instance_id == 2:
+            window_title = "Real-time EEG Viewer - Method 2 (IIR+ASR)"
+        elif instance_id == 3:
+            window_title = "Real-time EEG Viewer - Method 3 (IIR+ASR+ORICA)"
+        
+        self.setWindowTitle(window_title)
+        
+        # 根据实例ID调整窗口位置，避免重叠
+        x_pos = 100 + (instance_id - 1) * 50
+        y_pos = 100 + (instance_id - 1) * 50
+        self.setGeometry(x_pos, y_pos, 1000, 700)
+        
+        print(f"✅ 窗口标题: {window_title}")
+        print(f"✅ 实例ID: {instance_id}, 窗口位置: ({x_pos}, {y_pos})")
 
         
         self.tabs = QTabWidget()

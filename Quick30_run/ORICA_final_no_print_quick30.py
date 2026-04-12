@@ -885,7 +885,7 @@ class ORICA_final_new:
         #data[:, data_range] = self.snap_to_kbits(data[:, data_range], k=44)
         #print("data",data.shape)
 
-        block_size_orica = 16
+        block_size_orica = 32
         num_block_orica = int(np.floor(nPts / block_size_orica))
         print("num_block_orica",num_block_orica)
 
@@ -921,6 +921,15 @@ class ORICA_final_new:
 
                 start = int(bi * nPts / numsplits)        # 从 0 开始
                 end = min(nPts, int((bi + 1) * nPts / numsplits))
+                #这里似乎不是固定的32，而是32稍微多一点，保证每个block都是一样大的了
+                print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+                print("x"*30)
+                print("nPts",nPts)
+                print("numsplits",numsplits)
+                print("bi",bi)
+                print("start",start)
+                print("end",end)
+                print("x"*30)
                 data_range = np.arange(start, end)      # 右开区间，不需要 +1
 
 
@@ -1045,7 +1054,7 @@ class ORICA_final_new:
 
 
     def fit(self,data,
-            block_size_white=16,
+            block_size_white=32,
             num_pass=1,
             lambda_0=0.5,
             gamma=0.6,
