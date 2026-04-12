@@ -70,10 +70,10 @@ _ICLABEL_NORMALIZED_ALIASES: Dict[str, str] = {
 }
 
 _STAGE_DEFS: Dict[str, Tuple[str, str]] = {
-    "raw": ("Raw", "b95eeg_raw1.npz"),
-    "iir": ("IIR", "b95eeg_iir1.npz"),
-    "asr": ("ASR", "b95eeg_asr1.npz"),
-    "orica": ("ORICA", "b95eeg_orica1.npz"),
+    "raw": ("Raw", "b01eeg_raw1.npz"),
+    "iir": ("IIR", "b01eeg_iir1.npz"),
+    "asr": ("ASR", "b01eeg_asr1.npz"),
+    "orica": ("ORICA", "b01eeg_orica1.npz"),
 }
 
 # _STAGE_DEFS: Dict[str, Tuple[str, str]] = {
@@ -86,7 +86,7 @@ _STAGE_DEFS: Dict[str, Tuple[str, str]] = {
 
 
 _DEFAULT_WINDOW_SEC = 60.0*2
-_DEFAULT_OUT_SUBDIR = "ica_analysis_result_95_2min_same"
+_DEFAULT_OUT_SUBDIR = "ica_analysis_result_01_2min_same"
 _MIN_SAMPLES_FACTOR = 20  # 至少约 20 * n_ch 个样本再尝试 ICA（经验下限，偏保守）
 
 # ICA 算法：fastica 可用 fit_params 的 fun；infomax 不支持 fun（会报 unexpected keyword 'fun'）
