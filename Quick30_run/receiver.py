@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 import numpy as np
@@ -9,7 +10,6 @@ from filter_utils import EEGSignalProcessor
 from filter_utils_fir import example_usage
 from pylsl import resolve_streams
 from orica_processor import ORICAProcessor
-from asrpy import ASR
 import mne
 from scipy.signal import medfilt
 from meegkit import asr
@@ -19,9 +19,12 @@ import scipy.io
 from mne.filter import filter_data
 from FirFilter import rest_fir_filter
 from scipy.signal import butter, lfilter, lfilter_zi
+
+# 在线 ASR：默认 meegkit；环境变量 EEG_ASR_BACKEND=asrpy 时使用 asrpy（asr_process 跨缓冲保持 R/Zi/cov）。
 #this class to some extent is like a container which includs all of the paraments(orica, icalabel)
 class LSLStreamReceiver:
     def __init__(self, stream_type='EEG', time_range=5, stream_name='mybrain'):
+    #def __init__(self, stream_type='EEG', time_range=5, stream_name='CGX Quick-32r Q32r-0584'):
         # inoput LSL stream info
         self.stream_type = stream_type
         self.stream_name = stream_name
@@ -66,6 +69,16 @@ class LSLStreamReceiver:
         self.asr_calibration_size = 0
         # 累积用于ASR处理的缓冲区（按时间拼接，channels x samples）
         self.asr_accum_buffer = None
+        self.asr_backend = os.environ.get("EEG_ASR_BACKEND", "meegkit").strip().lower()
+        if self.asr_backend not in ("meegkit", "asrpy"):
+            print(
+                f"[WARN] EEG_ASR_BACKEND={self.asr_backend!r} 无效（仅 meegkit / asrpy），已回退 meegkit"
+            )
+            self.asr_backend = "meegkit"
+        self._asrpy_proc_R = None
+        self._asrpy_proc_Zi = None
+        self._asrpy_proc_cov = None
+        print(f"[ASR] 在线 EEG_ASR_BACKEND={self.asr_backend}")
 
         #ORICA
         self.orica = None
@@ -75,6 +88,8 @@ class LSLStreamReceiver:
         self.latest_ic_probs = None
         self.latest_ic_labels = None
         self.latest_eog_indices = None
+        # ICLabel artifact判定阈值（可由 run_two_instances.py 通过环境变量控制）
+        self.icalabel_threshold = 0.7
         
         # 简单的10秒数据收集
         self.calibration_data = None
@@ -152,9 +167,12 @@ class LSLStreamReceiver:
         self.nbchan = len(self.chan_range)
 
         # 4) buffer for visualization
-        self.buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
-        self.raw_buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
-        self.asr_buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
+        # self.buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
+        # self.raw_buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
+        # self.asr_buffer = np.zeros((info.channel_count(), self.srate * self.time_range))
+        self.buffer = np.zeros((self.nbchan, self.srate * self.time_range))
+        self.raw_buffer = np.zeros((self.nbchan, self.srate * self.time_range))
+        self.asr_buffer = np.zeros((self.nbchan, self.srate * self.time_range))
         #buffer for asr calibration
         #self.asr_calibration_data = np.zeros((info.channel_count(), self.srate * 40))
         self.asr_calibration_data = np.zeros((len(self.chan_range), self.srate * 40))
@@ -178,14 +196,22 @@ class LSLStreamReceiver:
 
 
     #input chunk, return modeify chunk and sources , artifact index
-    def process_orica(self, chunk):
+    def process_orica(self, chunk, threshold=None):
         """
         use the orica_processor.py to modify the chunk data
         """
+        if threshold is None:
+            threshold = self.icalabel_threshold
         cleaned_chunk = chunk.copy()
         if self.orica is not None:
             if self.orica.update_buffer(chunk[self.chan_range, :]):
-                sources, eog_indices, ic_probs, ic_labels= self.orica.fit(self.orica.data_buffer, self.chan_range, self.chan_labels, self.srate)
+                sources, eog_indices, ic_probs, ic_labels= self.orica.fit(
+                    self.orica.data_buffer,
+                    self.chan_range,
+                    self.chan_labels,
+                    self.srate,
+                    threshold=float(threshold),
+                )
                 if sources is not None:
                     cleaned = self.orica.transform(chunk[self.chan_range, :])
                     cleaned_chunk[self.chan_range, :] = cleaned  
@@ -246,6 +272,14 @@ class LSLStreamReceiver:
 
             chunk = np.array(samples)  # shape: (channels, samples)samples size is not a fixed value
 
+
+            chunk = chunk[self.chan_range, :]
+
+
+
+
+
+
             raw_chunk = chunk.copy()
             raw_chunk = raw_chunk[self.chan_range, :]
             # 每帧初始化四路阶段数据（后续分支会覆盖）
@@ -253,6 +287,7 @@ class LSLStreamReceiver:
             self.iir_chunk = chunk.copy()
             self.asr_chunk = chunk.copy()
             self.orica_chunk = chunk.copy()
+
 
             # # 简单的10秒数据收集
             # if not self.calibration_collected:
@@ -312,8 +347,10 @@ class LSLStreamReceiver:
 
 
 
-            import os
             filter_method = os.environ.get('IIR_FILTER_METHOD', '1')  # 默认使用方法1
+            th_env = os.environ.get("EEG_ICALABEL_THRESHOLD")
+            if th_env is not None and str(th_env).strip() != "":
+                self.icalabel_threshold = float(th_env)
 
 
 
@@ -360,7 +397,7 @@ class LSLStreamReceiver:
                         )
 
                     if self.asr_accum_buffer.shape[1] >= target_len:
-                        asr_out = self.asr_filter.transform(self.asr_accum_buffer)
+                        asr_out = self._apply_asr_accumulated_numpy(self.asr_accum_buffer)
 
                         if asr_out.shape[1] >= n_in:
                             chunk = asr_out[:, -n_in:]
@@ -429,7 +466,7 @@ class LSLStreamReceiver:
                         )
 
                     if self.asr_accum_buffer.shape[1] >= target_len:
-                        asr_out = self.asr_filter.transform(self.asr_accum_buffer)
+                        asr_out = self._apply_asr_accumulated_numpy(self.asr_accum_buffer)
 
                         if asr_out.shape[1] >= n_in:
                             chunk = asr_out[:, -n_in:]
@@ -500,6 +537,138 @@ class LSLStreamReceiver:
                 # 本帧入口样本数（LSL chunk 宽）。raw_buffer 与 buffer 必须用同一 n roll，
                 # 否则两缓冲推进的列数不一致，会越滚越错位；“卡一下”常出现在 ASR 首次输出或
                 # asr_out 长度 < 本帧 chunk 时，原先先写了 raw 再改短 chunk，蓝线比红线少推几列。
+                print("1"*100)
+                n_in = int(chunk.shape[1])
+
+                print("2"*100)
+
+                self.raw_chunk=chunk.copy()
+
+                chunk = self.apply_online_iir_filter(chunk)
+                chunk_after_iir = chunk.copy()
+
+                self.iir_chunk=chunk.copy()
+
+
+                print("3"*100)
+                # update buffer after ORICA
+                num_new0 = chunk.shape[1]
+                self.raw_buffer = np.roll(self.raw_buffer, -num_new0, axis=1)
+                self.raw_buffer[:, -num_new0:] = chunk
+
+
+
+                print("x"*100)
+                if self.asr_filter is None:
+                    # 可由启动脚本按实例注入：
+                    # EEG_ASR_CALIB_NPZ / EEG_ASR_CUTOFF
+                    asr_npz_path = os.environ.get("EEG_ASR_CALIB_NPZ")
+                    if not asr_npz_path:
+                        raise ValueError("缺少环境变量 EEG_ASR_CALIB_NPZ。")
+                    asr_cutoff_env = os.environ.get("EEG_ASR_CUTOFF")
+                    if not asr_cutoff_env:
+                        raise ValueError("缺少环境变量 EEG_ASR_CUTOFF。")
+                    asr_cutoff = float(asr_cutoff_env)
+                    print("c"*100)
+                    print("asr_npz_path",asr_npz_path)
+                    print("asr_cutoff",asr_cutoff)
+                    print("c"*100)
+                    self.initialize_asr_from_npz_1(
+                        npz_file_path=asr_npz_path,
+                        cutoff=asr_cutoff,
+                    )
+                    #self.initialize_asr_from_mat_1(mat_file_path=r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_quick30.mat",cutoff=10)
+                    #self.initialize_asr_from_npz_1(npz_file_path=r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_quick30.npz",cutoff=10)
+
+                if self.asr_filter is not None:
+                    print("using asr")
+                    target_len = int(self.srate * 0.5) if self.srate is not None else n_in
+
+
+                    if self.asr_accum_buffer is None:
+                        self.asr_accum_buffer = chunk.copy()
+                    else:
+                        self.asr_accum_buffer = np.concatenate(
+                            [self.asr_accum_buffer, chunk], axis=1
+                        )
+                    print("self.asr_accum_buffer.shape[1]",self.asr_accum_buffer.shape)
+                    if self.asr_accum_buffer.shape[1] >= target_len:
+                        print("6"*100)
+                        asr_out = self._apply_asr_accumulated_numpy(self.asr_accum_buffer)
+                        print("7"*100)
+                        if asr_out.shape[1] >= n_in:
+                            chunk = asr_out[:, -n_in:]
+                        else:
+                            pad = n_in - asr_out.shape[1]
+                            chunk = np.pad(asr_out, ((0, 0), (pad, 0)), mode="edge")
+                        print("8"*100)
+                        if asr_out.shape[1] > target_len:
+                            self.asr_accum_buffer = asr_out[:, -target_len:]
+                        else:
+                            self.asr_accum_buffer = asr_out.copy()
+                    else:
+                        chunk = chunk_after_iir.copy()
+
+                print("4x"*100)
+                if chunk.shape[1] != n_in:
+                    if chunk.shape[1] > n_in:
+                        chunk = chunk[:, -n_in:]
+                    else:
+                        chunk = np.pad(
+                            chunk,
+                            ((0, 0), (n_in - chunk.shape[1], 0)),
+                            mode="edge",
+                        )
+
+                self.asr_chunk=chunk.copy()
+
+
+                self.last_unclean_chunk = chunk.copy()
+                # update buffer before ORICA
+                if self.asr_buffer is not None:
+                    self.asr_buffer = np.roll(self.asr_buffer, -chunk.shape[1], axis=1)
+                    self.asr_buffer[:, -chunk.shape[1]:] = self.last_unclean_chunk
+
+                print("Before",chunk.shape)
+
+                # ORICA processing
+                chunk, ica_sources, eog_indices = self.process_orica(
+                    chunk,
+                    threshold=self.icalabel_threshold,
+                )
+                if ica_sources is not None:
+                    self.latest_sources = ica_sources
+                if eog_indices is not None:
+                    self.latest_eog_indices = eog_indices
+
+                print("After",chunk.shape)
+                
+                self.orica_chunk=chunk.copy()
+
+                    
+
+                # if chunk.shape[1] != n_in:
+                #     if chunk.shape[1] > n_in:
+                #         chunk = chunk[:, -n_in:]
+                #     else:
+                #         chunk = np.pad(
+                #             chunk,
+                #             ((0, 0), (n_in - chunk.shape[1], 0)),
+                #             mode="edge",
+                #         )
+
+                #self.last_unclean_chunk = chunk_after_iir.copy()
+                self.last_processed_chunk = chunk.copy()
+                # if self.raw_buffer is not None:
+                #     self.raw_buffer = np.roll(self.raw_buffer, -n_in, axis=1)
+                #     self.raw_buffer[:, -n_in:] = chunk_after_iir
+
+
+
+            elif filter_method == '41':
+                # 本帧入口样本数（LSL chunk 宽）。raw_buffer 与 buffer 必须用同一 n roll，
+                # 否则两缓冲推进的列数不一致，会越滚越错位；“卡一下”常出现在 ASR 首次输出或
+                # asr_out 长度 < 本帧 chunk 时，原先先写了 raw 再改短 chunk，蓝线比红线少推几列。
                 n_in = int(chunk.shape[1])
 
                 self.raw_chunk=chunk.copy()
@@ -520,7 +689,20 @@ class LSLStreamReceiver:
 
 
                 if self.asr_filter is None:
-                    self.initialize_asr_from_mat(cutoff=5)
+                    # 可由启动脚本按实例注入：
+                    # EEG_ASR_CALIB_NPZ / EEG_ASR_CUTOFF
+                    asr_npz_path = os.environ.get("EEG_ASR_CALIB_NPZ")
+                    if not asr_npz_path:
+                        raise ValueError("缺少环境变量 EEG_ASR_CALIB_NPZ。")
+                    asr_cutoff_env = os.environ.get("EEG_ASR_CUTOFF")
+                    if not asr_cutoff_env:
+                        raise ValueError("缺少环境变量 EEG_ASR_CUTOFF。")
+                    asr_cutoff = float(asr_cutoff_env)
+                    self.initialize_asr_from_npz_1(
+                        npz_file_path=asr_npz_path,
+                        cutoff=asr_cutoff,
+                    )
+                    #self.initialize_asr_from_npz_1(npz_file_path=r"D:\work\Python_Project\ORICA\Quick30_run\artifact_removal_verify\set_npz\npz_data\cali\laparoscopic_1311_EEGmerged_iir_filtered.npz",cutoff=10)
 
                 if self.asr_filter is not None:
                     print("using asr")
@@ -534,7 +716,7 @@ class LSLStreamReceiver:
                         )
 
                     if self.asr_accum_buffer.shape[1] >= target_len:
-                        asr_out = self.asr_filter.transform(self.asr_accum_buffer)
+                        asr_out = self._apply_asr_accumulated_numpy(self.asr_accum_buffer)
 
                         if asr_out.shape[1] >= n_in:
                             chunk = asr_out[:, -n_in:]
@@ -572,7 +754,10 @@ class LSLStreamReceiver:
                 print("Before",chunk.shape)
                         
                 # ORICA processing
-                chunk, ica_sources, eog_indices = self.process_orica(chunk)
+                chunk, ica_sources, eog_indices = self.process_orica(
+                    chunk,
+                    threshold=self.icalabel_threshold,
+                )
                 if ica_sources is not None:
                     self.latest_sources = ica_sources
                 if eog_indices is not None:
@@ -603,7 +788,7 @@ class LSLStreamReceiver:
 
 
 
-            elif filter_method == '5':
+            elif filter_method == '5xw':
                 # 本帧入口样本数（LSL chunk 宽）。raw_buffer 与 buffer 必须用同一 n roll，
                 # 否则两缓冲推进的列数不一致，会越滚越错位；“卡一下”常出现在 ASR 首次输出或
                 # asr_out 长度 < 本帧 chunk 时，原先先写了 raw 再改短 chunk，蓝线比红线少推几列。
@@ -640,7 +825,7 @@ class LSLStreamReceiver:
                         )
 
                     if self.asr_accum_buffer.shape[1] >= target_len:
-                        asr_out = self.asr_filter.transform(self.asr_accum_buffer)
+                        asr_out = self._apply_asr_accumulated_numpy(self.asr_accum_buffer)
 
                         if asr_out.shape[1] >= n_in:
                             chunk = asr_out[:, -n_in:]
@@ -679,7 +864,10 @@ class LSLStreamReceiver:
                 print("Before",chunk.shape)
                         
                 # ORICA processing
-                chunk, ica_sources, eog_indices = self.process_orica(chunk)
+                chunk, ica_sources, eog_indices = self.process_orica(
+                    chunk,
+                    threshold=self.icalabel_threshold,
+                )
                 if ica_sources is not None:
                     self.latest_sources = ica_sources
                 if eog_indices is not None:
@@ -1115,18 +1303,33 @@ class LSLStreamReceiver:
         self.asr_data_list = []
         self.orica_data_list = []
         self.last_data_time = None
+        import os
+        # 支持通过环境变量为多实例分别配置保存标签/目录
+        # 例如：
+        #   EEG_SAVE_FILE_TAG=b84
+        #   EEG_SAVE_DIR=processed_data_saves_threshold/asr20_2min_70/runA
+        file_tag = os.environ.get("EEG_SAVE_FILE_TAG")
+        if not file_tag:
+            raise ValueError(
+                "缺少环境变量 EEG_SAVE_FILE_TAG（例如 b84a / b84b）。"
+            )
         
         if save_file is None:
             from datetime import datetime
             from pathlib import Path
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_dir = Path(__file__).parent / 'processed_data_saves_threshold'
+            save_dir_env = os.environ.get("EEG_SAVE_DIR")
+            if not save_dir_env:
+                raise ValueError(
+                    "缺少环境变量 EEG_SAVE_DIR（例如 processed_data_saves_threshold/asr20_2min_70/runA）。"
+                )
+            save_dir = Path(__file__).parent / save_dir_env
             save_dir.mkdir(parents=True, exist_ok=True)
             # 生成四个阶段文件路径
-            raw_file = save_dir / "b09eeg_raw1.npz"
-            iir_file = save_dir / "b09eeg_iir1.npz"
-            asr_file = save_dir / "b09eeg_asr1.npz"
-            orica_file = save_dir / "b09eeg_orica1.npz"
+            raw_file = save_dir / f"{file_tag}eeg_raw1.npz"
+            iir_file = save_dir / f"{file_tag}eeg_iir1.npz"
+            asr_file = save_dir / f"{file_tag}eeg_asr1.npz"
+            orica_file = save_dir / f"{file_tag}eeg_orica1.npz"
             '''
               iclablethreshold   chunk(timeout=1)
             x 0.8     0
@@ -1139,16 +1342,17 @@ class LSLStreamReceiver:
             # 如果提供了文件路径，基于它生成两个文件路径
             save_path = Path(save_file)
             save_dir = save_path.parent
-            raw_file = save_dir / "b09eeg_raw1.npz"
-            iir_file = save_dir / "b09eeg_iir1.npz"
-            asr_file = save_dir / "b09eeg_asr1.npz"
-            orica_file = save_dir / "b09eeg_orica1.npz"
+            raw_file = save_dir / f"{file_tag}eeg_raw1.npz"
+            iir_file = save_dir / f"{file_tag}eeg_iir1.npz"
+            asr_file = save_dir / f"{file_tag}eeg_asr1.npz"
+            orica_file = save_dir / f"{file_tag}eeg_orica1.npz"
         
         self.raw_save_file = Path(raw_file)
         self.iir_save_file = Path(iir_file)
         self.asr_save_file = Path(asr_file)
         self.orica_save_file = Path(orica_file)
         print(f"✅ 已启用数据保存")
+        print(f"   file_tag: {file_tag}")
         print(f"   Raw文件: {self.raw_save_file}")
         print(f"   IIR文件: {self.iir_save_file}")
         print(f"   ASR文件: {self.asr_save_file}")
@@ -1312,6 +1516,78 @@ class LSLStreamReceiver:
         else:
             print("⚠️ 校准数据缓冲区已满")
 
+    def _asrpy_channel_names(self):
+        n = len(self.chan_range)
+        labels = list(self.chan_labels) if self.chan_labels else []
+        if len(labels) >= n:
+            return [str(labels[i]) for i in range(n)]
+        return [f"EEG{i+1:03d}" for i in range(n)]
+
+    def _fit_asrpy_on_calibration_numpy(self, calibration_data, cutoff):
+        import asrpy
+
+        x = np.asarray(calibration_data, dtype=np.float64)
+        ch_names = self._asrpy_channel_names()
+        if x.shape[0] != len(ch_names):
+            ch_names = [f"EEG{i+1:03d}" for i in range(x.shape[0])]
+        info = mne.create_info(
+            ch_names=ch_names, sfreq=float(self.srate), ch_types="eeg"
+        )
+        raw = mne.io.RawArray(x, info, verbose=False)
+        try:
+            raw.set_montage("standard_1020", on_missing="ignore")
+        except Exception:
+            pass
+        asr_inst = asrpy.ASR(sfreq=float(self.srate), cutoff=float(cutoff))
+        asr_inst.fit(raw, picks="eeg")
+        self.asr_filter = asr_inst
+        self._asrpy_proc_R = None
+        self._asrpy_proc_Zi = None
+        self._asrpy_proc_cov = None
+
+    def _apply_asr_accumulated_numpy(self, accum):
+        if self.asr_backend == "meegkit":
+            return self.asr_filter.transform(np.asarray(accum, dtype=np.float64))
+        from asrpy.asr import asr_process
+
+        asr_inst = self.asr_filter
+        sfreq = float(self.srate)
+        lookahead = 0.25
+        stepsize = 32
+        maxdims = 0.66
+        mem_splits = 1
+        x = np.asarray(accum, dtype=np.float64)
+        n_ch, Lp = x.shape
+        ls = int(float(sfreq) * lookahead)
+        X_in = np.concatenate([x, np.zeros((n_ch, ls), dtype=np.float64)], axis=1)
+        out, st = asr_process(
+            X_in,
+            sfreq,
+            asr_inst.M,
+            asr_inst.T,
+            asr_inst.win_len,
+            float(lookahead),
+            int(stepsize),
+            float(maxdims),
+            (asr_inst.A, asr_inst.B),
+            self._asrpy_proc_R,
+            self._asrpy_proc_Zi,
+            self._asrpy_proc_cov,
+            None,
+            True,
+            asr_inst.method,
+            int(mem_splits),
+        )
+        self._asrpy_proc_R = st["R"]
+        self._asrpy_proc_Zi = st["Zi"]
+        self._asrpy_proc_cov = st["cov"]
+        out = np.asarray(out[:, ls:], dtype=np.float64)
+        if out.shape[1] > Lp:
+            out = out[:, -Lp:]
+        elif out.shape[1] < Lp:
+            out = np.pad(out, ((0, 0), (Lp - out.shape[1], 0)), mode="edge")
+        return out
+
     def initialize_asr_from_mat(self, mat_file_path=r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_quick30.mat",cutoff=5):
         """
         从 MATLAB 文件加载校准数据并初始化 ASR（只执行一次）
@@ -1353,12 +1629,15 @@ class LSLStreamReceiver:
                 calibration_data = calibration_data[self.chan_range, :]
                 print(f"✅ 已调整校准数据形状: {calibration_data.shape}")
             
-            # 初始化并拟合 ASR
-            self.asr_filter = asr.ASR(
-                sfreq=self.srate,
-                cutoff=cutoff,
-            )
-            self.asr_filter.fit(calibration_data)
+            if self.asr_backend == "asrpy":
+                print(f"🔧 初始化 ASR (asrpy, cutoff={cutoff})...")
+                self._fit_asrpy_on_calibration_numpy(calibration_data, cutoff)
+            else:
+                self.asr_filter = asr.ASR(
+                    sfreq=self.srate,
+                    cutoff=cutoff,
+                )
+                self.asr_filter.fit(calibration_data)
             print(f"✅ ASR 已校准完成，通道数: {calibration_data.shape[0]}")
             
             return self.asr_filter
@@ -1461,17 +1740,16 @@ class LSLStreamReceiver:
                     print(f"⚠️ 采样率不匹配：文件 {file_srate} Hz，当前 {self.srate} Hz")
                     print(f"   使用当前采样率: {self.srate} Hz")
             
-            # 初始化并拟合 ASR (使用meegkit.asr)
-            print(f"🔧 初始化ASR滤波器 (cutoff={cutoff}, sfreq={self.srate} Hz)...")
+            print(f"🔧 初始化ASR滤波器 ({self.asr_backend}, cutoff={cutoff}, sfreq={self.srate} Hz)...")
             print(f"   注意: cutoff是标准差倍数，不是频率！值越小越激进，值越大越保守")
-            # 这里必须使用函数参数 cutoff，而不是写死常数，才能让外部调节生效
-            self.asr_filter = asr.ASR(
-                sfreq=self.srate,
-                cutoff=cutoff,
-            )
-            
-            # 拟合校准数据
-            self.asr_filter.fit(calibration_data)
+            if self.asr_backend == "asrpy":
+                self._fit_asrpy_on_calibration_numpy(calibration_data, cutoff)
+            else:
+                self.asr_filter = asr.ASR(
+                    sfreq=self.srate,
+                    cutoff=cutoff,
+                )
+                self.asr_filter.fit(calibration_data)
             
             print(f"✅ ASR 校准完成！")
             print(f"   通道数: {calibration_data.shape[0]}")
@@ -1481,6 +1759,121 @@ class LSLStreamReceiver:
             
             return self.asr_filter
             
+        except Exception as e:
+            print(f"❌ ASR 初始化失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def initialize_asr_from_mat_1(self, mat_file_path=r"D:\work\Python_Project\ORICA\temp_txt\cleaned_data_quick30.mat", cutoff=5):
+        """
+        从 .mat 文件加载校准数据并初始化 ASR（与 initialize_asr_from_npz_1 同逻辑）。
+        唯一区别：输入来源是 MATLAB 文件。
+
+        Args:
+            mat_file_path: 校准数据的 .mat 文件路径
+            cutoff: ASR截止阈值（标准差倍数），默认5。值越小越激进，值越大越保守
+
+        Returns:
+            asr_filter: 初始化并拟合好的ASR滤波器对象，失败返回None
+        """
+        if self.asr_filter is not None:
+            print("⏩ ASR 已校准，跳过重复初始化")
+            return self.asr_filter
+
+        try:
+            from pathlib import Path
+            file_path = Path(mat_file_path)
+
+            if not file_path.exists():
+                print(f"❌ 校准文件不存在: {mat_file_path}")
+                return None
+
+            print(f"📂 加载ASR校准数据: {file_path.name}")
+
+            # 加载MAT文件
+            if file_path.suffix.lower() != ".mat":
+                print(f"❌ 不支持的文件格式，需要.mat文件")
+                return None
+
+            mat_data = scipy.io.loadmat(file_path)
+
+            # 提取校准数据（优先 cleaned_data.data，再 data）
+            calibration_data = None
+            if "cleaned_data" in mat_data:
+                try:
+                    eeg_struct = mat_data["cleaned_data"][0, 0]
+                    if hasattr(eeg_struct, "dtype") and "data" in eeg_struct.dtype.names:
+                        calibration_data = eeg_struct["data"]
+                        print("   使用字段: cleaned_data.data")
+                except Exception:
+                    calibration_data = None
+            if calibration_data is None and "data" in mat_data:
+                calibration_data = mat_data["data"]
+                print("   使用字段: data")
+
+            if calibration_data is None:
+                print(f"❌ 无法从文件中提取校准数据，可用字段: {list(mat_data.keys())}")
+                return None
+
+            # 转换为标准数组格式 (channels, samples)
+            calibration_data = np.asarray(calibration_data, dtype=np.float64)
+
+            # 确保数据格式为 (channels, samples)
+            # 判断逻辑：如果第一个维度远大于第二个维度（比如样本数远大于通道数），说明是 (samples, channels)，需要转置
+            if calibration_data.ndim == 2:
+                if calibration_data.shape[0] > calibration_data.shape[1] * 10:
+                    # 如果第一个维度远大于第二个维度（比如 1000000 > 100），说明是 (samples, channels)，需要转置
+                    print(f"   ⚠️ 检测到数据形状 {calibration_data.shape}，可能是 (samples, channels)，将转置")
+                    calibration_data = calibration_data.T
+                    print(f"   转置后形状: {calibration_data.shape} (channels, samples)")
+
+            print(f"✅ 校准数据加载成功 - 形状: {calibration_data.shape} (channels, samples)")
+
+            # 检查通道数匹配
+            if calibration_data.shape[0] != len(self.chan_range):
+                print(f"⚠️ 通道数不匹配：校准数据 {calibration_data.shape[0]} 通道，当前使用 {len(self.chan_range)} 通道")
+
+                # 如果校准数据通道数更多，尝试选择对应的通道
+                if calibration_data.shape[0] > len(self.chan_range):
+                    # 假设前N个通道对应
+                    calibration_data = calibration_data[:len(self.chan_range), :]
+                    print(f"   已选择前 {len(self.chan_range)} 个通道")
+                else:
+                    print(f"   ⚠️ 校准数据通道数不足，可能影响ASR效果")
+
+            # 获取采样率（如果文件中有保存）
+            file_srate = self.srate
+            if "sampling_rate" in mat_data:
+                file_srate = int(np.asarray(mat_data["sampling_rate"]).squeeze())
+                if file_srate != self.srate:
+                    print(f"⚠️ 采样率不匹配：文件 {file_srate} Hz，当前 {self.srate} Hz")
+                    print(f"   使用当前采样率: {self.srate} Hz")
+            elif "srate" in mat_data:
+                file_srate = int(np.asarray(mat_data["srate"]).squeeze())
+                if file_srate != self.srate:
+                    print(f"⚠️ 采样率不匹配：文件 {file_srate} Hz，当前 {self.srate} Hz")
+                    print(f"   使用当前采样率: {self.srate} Hz")
+
+            print(f"🔧 初始化ASR滤波器 ({self.asr_backend}, cutoff={cutoff}, sfreq={self.srate} Hz)...")
+            print(f"   注意: cutoff是标准差倍数，不是频率！值越小越激进，值越大越保守")
+            if self.asr_backend == "asrpy":
+                self._fit_asrpy_on_calibration_numpy(calibration_data, cutoff)
+            else:
+                self.asr_filter = asr.ASR(
+                    sfreq=self.srate,
+                    cutoff=cutoff,
+                )
+                self.asr_filter.fit(calibration_data)
+
+            print(f"✅ ASR 校准完成！")
+            print(f"   通道数: {calibration_data.shape[0]}")
+            print(f"   数据长度: {calibration_data.shape[1]} 样本 ({calibration_data.shape[1]/self.srate:.2f} 秒)")
+            print(f"   采样率: {self.srate} Hz")
+            print(f"   cutoff阈值: {cutoff} (标准差倍数)")
+
+            return self.asr_filter
+
         except Exception as e:
             print(f"❌ ASR 初始化失败: {e}")
             import traceback
@@ -1514,12 +1907,16 @@ class LSLStreamReceiver:
                 calibration_data = calibration_data[self.chan_range, :]
                 print(f"✅ 已调整校准数据形状: {calibration_data.shape}")
             
-            # 初始化并拟合 ASR
-            self.asr_filter = asr.ASR(
-                sfreq=self.srate,
-                cutoff=5,
-            )
-            self.asr_filter.fit(calibration_data)
+            cutoff_online = 5
+            if self.asr_backend == "asrpy":
+                print(f"🔧 初始化 ASR (asrpy, cutoff={cutoff_online})...")
+                self._fit_asrpy_on_calibration_numpy(calibration_data, cutoff_online)
+            else:
+                self.asr_filter = asr.ASR(
+                    sfreq=self.srate,
+                    cutoff=cutoff_online,
+                )
+                self.asr_filter.fit(calibration_data)
             print(f"✅ ASR 已校准完成，通道数: {calibration_data.shape[0]}")
             
             return self.asr_filter

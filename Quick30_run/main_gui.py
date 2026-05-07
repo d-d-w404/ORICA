@@ -52,6 +52,10 @@ class EEGGUI(QWidget):
             window_title = "Real-time EEG Viewer - Method 2 (IIR+ASR)"
         elif instance_id == 3:
             window_title = "Real-time EEG Viewer - Method 3 (IIR+ASR+ORICA)"
+        else:
+            # 支持 4、5... 等更多并行实例
+            method_tag = os.environ.get("IIR_FILTER_METHOD", str(instance_id))
+            window_title = f"Real-time EEG Viewer - Instance {instance_id} (method={method_tag})"
         
         self.setWindowTitle(window_title)
         
