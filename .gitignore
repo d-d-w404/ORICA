@@ -1,0 +1,37 @@
+# Python / IDE
+.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.idea/
+
+# Not part of repo
+trash/
+paper/
+
+# Data: large binaries & experiment artifacts (keep .py / .md / .gitkeep)
+**/*.npz
+**/*.set
+**/*.fdt
+**/*.mat
+**/*.h5
+**/*.hdf5
+**/*.pth
+**/*.pt
+**/*.pkl
+**/*.joblib
+**/*.wav
+**/*.mp3
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.pdf
+**/*.xlsx
+**/*.xls
+**/*.csv
+data/**/*.txt
+
+# OS
+.DS_Store
+Thumbs.db
