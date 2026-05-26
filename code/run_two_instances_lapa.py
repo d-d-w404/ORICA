@@ -7,7 +7,7 @@ import time
 import os
 from pathlib import Path
 
-from paths import ARTIFACT_VERIFY_ROOT
+from paths import INPUT_DATA_ROOT
 
 def main():
     script_dir = Path(__file__).parent
@@ -18,29 +18,31 @@ def main():
     print("=" * 60)
     print()
 
-    # 只改这一项：受试者编号（例如 "1311"、"1295"）
-    #subject_id = "001"
-    # subject_id = "003"
-    #subject_id = "1271"
-    #subject_id = "1284"
-    #subject_id = "1295"
-    #subject_id = "1307"
-    #subject_id = "1309"
-    subject_id = "1311"
-    
-    # 自动映射：1311 -> b11, 1295 -> b95
-    file_tag = f"b{subject_id[-2:]}"
+    # 只改这一项：须与 npz/lap/、asr_cali/lap/2min/ 下文件名一致（不含 .npz）
+    #subject_id = "lapa_001"
+    #subject_id = "lapa_003"
+    subject_id = "lapa_1271"
+    #subject_id = "lapa_1284"
+    #subject_id = "lapa_1295"
+    #subject_id = "lapa_1307"
+    #subject_id = "lapa_1309" 
+    #subject_id = "lapa_1311"
+
+    # 从 subject_id 取出编号（如 lapa_1309 -> 1309），再取后两位 -> b09（与旧腹腔镜 1309 相同）
+    _num = subject_id.split("_")[-1]
+    file_tag = f"b{_num[-2:]}"
+
     asr_calib_npz = str(
-        ARTIFACT_VERIFY_ROOT
-        / "set_npz/npz_data/cali3"
-        / f"laparoscopic_{subject_id}_EEGmerged_calibration.npz"
+        INPUT_DATA_ROOT
+        / "asr_cali/Lapa/2min"
+        / f"{subject_id}.npz"
     )
 
     # 只保留实验参数，避免重复写 file_tag / asr_calib_npz
     raw_experiments = [
         #{"method": "4", "save_dir": "output_data/1asr5_2min_70", "asr_cutoff": "5", "icalabel_threshold": "0.7"},
-        #{"method": "4", "save_dir": "output_data/1asrpy20_2min_70", "asr_cutoff": "20", "icalabel_threshold": "0.7"},
-        {"method": "4", "save_dir": "output_data/1asrpy100_2min_70", "asr_cutoff": "100", "icalabel_threshold": "0.7"},
+        {"method": "4", "save_dir": "output_data/Lapaasrpy20_2min_70", "asr_cutoff": "20", "icalabel_threshold": "0.7"},
+        #{"method": "4", "save_dir": "output_data/Lapaasrpy100_2min_70", "asr_cutoff": "100", "icalabel_threshold": "0.7"},
         #{"method": "4", "save_dir": "output_data/1asr20_2min_90", "asr_cutoff": "20", "icalabel_threshold": "0.9"},
         #{"method": "4", "save_dir": "output_data/1asr20_2min_50", "asr_cutoff": "20", "icalabel_threshold": "0.5"},
     ]
@@ -83,6 +85,7 @@ def main():
     print("=" * 60)
     print()
     print("提示：各实例会接收同一 LSL 数据流，但使用各自参数并写入各自目录。")
+    print("LSL 广播请在 aa_lsl_npz.py 中设置：INPUT_DATA_ROOT / \"npz/lap\" / f\"{subject_id}.npz\"")
     print("如需新增实例，直接在 instance_configs 里加一行。")
     print()
     print("按 Ctrl+C 退出此脚本（不会关闭GUI窗口）")
@@ -95,4 +98,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

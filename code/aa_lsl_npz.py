@@ -35,45 +35,12 @@ _SCRIPT_DIR = Path(__file__).resolve().parent  # code/
 #这个是经过了IIR之后的数据
 #INPUT_FILE = DATA_ROOT / "artifact_removal_verify/IIR_filter2/laparoscopic_1309_EEGmerged.npz"
 
+#Lapa Dataset
+INPUT_FILE = INPUT_DATA_ROOT / "npz/Lapa/lapa_1271.npz"
 
-#这个是不经过IIR的原始数据
-#1309
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/laparoscopic_1309_EEGmerged.npz"
-
-#1307
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/laparoscopic_1307_EEGmerged.npz"
-
-#1311
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/laparoscopic_1311_EEGmerged.npz"
-
-#1295
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/laparoscopic_1295_EEGmerged.npz"
-
-#1284
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/laparoscopic_1284_EEGmerged.npz"
-
-#1271
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/laparoscopic_1271_EEGmerged.npz"
-
-#003
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/laparoscopic_003_EEGmerged.npz"
-
-#001
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/laparoscopic_001_EEGmerged.npz"
-
-
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/set_data/laparoscopic_1309_EEGmerged.set"
-
-
-
-#A01T
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/BNCI/npz/A01T.npz"
-
-#INPUT_FILE = DATA_ROOT / "artifact_removal_verify/set_npz/npz_data/online_cali/Record_data/lsl_input_npz/online_calibration_1_45hz_20260505_013846_for_lsl.npz"
-
-
+#Driving Dataset
 # LSL 广播：原始 EEG 流（未做 ASR 校准滤波）
-INPUT_FILE = INPUT_DATA_ROOT / "npz/Shawn_shared/s28_resampled.npz"
+#INPUT_FILE = INPUT_DATA_ROOT / "npz/Shawn_shared/s28_resampled.npz"
 
 # ASR 校准数据（IIR 1–50 Hz 后，通常用 2min 版做 calibration）
 #INPUT_FILE = INPUT_DATA_ROOT / "asr_cali/Shawn_shared/2min/s28_resampled.npz"

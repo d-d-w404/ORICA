@@ -80,8 +80,8 @@ DEFAULT_CATEGORIES: Tuple[str, ...] = ALL_KNOWN_CLASSES
 # ---------------------------------------------------------------------------
 # 运行配置（只改这里，无需命令行参数）
 # ---------------------------------------------------------------------------
-#EXPERIMENT: str = "1asrpy100_2min_70"
-EXPERIMENT: str = "SN_Driveasrpy20_2min_70"
+EXPERIMENT: str = "Lapaasrpy20_2min_70"
+#EXPERIMENT: str = "SN_Driveasrpy20_2min_70"
 #SEGMENT_PREFIX: str = "segment_exclude_window_10_remove"
 #SEGMENT_PREFIX: str = "para_basic_window_10_remove"
 #SEGMENT_PREFIX: str = "para_basic_window_120_remove"

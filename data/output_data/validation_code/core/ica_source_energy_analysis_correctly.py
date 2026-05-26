@@ -55,8 +55,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 
-PROFILES: List[str] = ["SN_Driveasrpy20_2min_70"]
-DATASET_IDS: List[str] = ["s28"]
+PROFILES: List[str] = ["Lapaasrpy20_2min_70"]
+#DATASET_IDS: List[str] = ["s28"]
+DATASET_IDS: List[str] = ["84"]
 #DATASET_IDS: List[str] = ["07","09","11","71","84","95"]
 CONTINUE_ON_ERROR = True
 
