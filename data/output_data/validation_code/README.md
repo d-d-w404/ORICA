@@ -1,36 +1,36 @@
 # validation_code
 
-实验数据仍在上一级 `output_data/`（profile 子目录、npz、分析输出）。
+Experiment data still lives in the parent `output_data/` directory (profile subfolders, npz files, analysis outputs).
 
-## 目录
+## Layout
 
-| 目录 | 说明 |
-|------|------|
-| **`core/`** | 日常使用的 4 个主脚本 |
-| **`trash/`** | 历史/备用脚本（保留子目录结构，以后可能再用） |
-| `_paths.py` / `_bootstrap.py` | 共用路径（`OUTPUT_DATA_ROOT` / `THRESHOLD_ROOT` = 数据根） |
+| Directory | Description |
+|-----------|-------------|
+| **`core/`** | Four main scripts used day to day |
+| **`trash/`** | Legacy / backup scripts (subdir layout preserved for possible reuse) |
+| `_paths.py` / `_bootstrap.py` | Shared path helpers (`OUTPUT_DATA_ROOT` / `THRESHOLD_ROOT` = data root) |
 
-## core 脚本
+## core scripts
 
-| 文件 | 用途 |
-|------|------|
-| `artifact_removal_analysis_ica.py` | 每窗各自 fit ICA + ICLabel |
-| `artifact_removal_analysis_ica_same_save.py` | IIR 上 fit 一次 ICA + 分窗 ICLabel + 导出 ic_sources |
-| `ica_source_energy_analysis_correctly.py` | ICA 源能量 / MS / exclude 段分析 |
-| `aggregate_exclude_bad_pct_multisubject_average.py` | 跨被试 exclude 类占比汇总 |
+| File | Purpose |
+|------|---------|
+| `artifact_removal_analysis_ica.py` | Fit ICA + ICLabel per sliding window |
+| `artifact_removal_analysis_ica_same_save.py` | Single ICA fit on IIR data + windowed ICLabel + export `ic_sources` |
+| `ica_source_energy_analysis_correctly.py` | ICA source energy / MS / exclude-segment analysis |
+| `aggregate_exclude_bad_pct_multisubject_average.py` | Cross-subject summary of exclude-segment class percentages |
 
-## 路径（脚本内已自动解析）
+## Paths (resolved automatically in scripts)
 
 ```python
-# 任意 core/ 或 trash/ 深度均可
+# Works from any depth under core/ or trash/
 from _bootstrap import bootstrap_paths
 THRESHOLD_ROOT, DATA_ROOT, CODE_DIR, REPO_ROOT, ARTIFACT_VERIFY_ROOT = bootstrap_paths()
 ```
 
-- **npz / 输出**：`THRESHOLD_ROOT / "<profile>" / ...`
-- **code 模块**：`CODE_DIR`（receiver、orica_processor）
+- **npz / outputs**: `THRESHOLD_ROOT / "<profile>" / ...`
+- **code modules**: `CODE_DIR` (receiver, orica_processor)
 
-## 运行示例
+## Run examples
 
 ```bash
 cd .../validation_code/core
