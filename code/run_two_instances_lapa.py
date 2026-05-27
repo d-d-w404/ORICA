@@ -41,7 +41,7 @@ def main():
     # 只保留实验参数，避免重复写 file_tag / asr_calib_npz
     raw_experiments = [
         #{"method": "4", "save_dir": "output_data/1asr5_2min_70", "asr_cutoff": "5", "icalabel_threshold": "0.7"},
-        {"method": "4", "save_dir": "output_data/Lapaasrpy20_2min_70", "asr_cutoff": "20", "icalabel_threshold": "0.7"},
+        {"method": "4", "save_dir": "output_data/xLapaasrpy20_2min_70", "asr_cutoff": "20", "icalabel_threshold": "0.7"},
         #{"method": "4", "save_dir": "output_data/Lapaasrpy100_2min_70", "asr_cutoff": "100", "icalabel_threshold": "0.7"},
         #{"method": "4", "save_dir": "output_data/1asr20_2min_90", "asr_cutoff": "20", "icalabel_threshold": "0.9"},
         #{"method": "4", "save_dir": "output_data/1asr20_2min_50", "asr_cutoff": "20", "icalabel_threshold": "0.5"},

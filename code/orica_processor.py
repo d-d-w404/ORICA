@@ -48,6 +48,94 @@ def _canonical_names_for_standard_montage(
     return out, montage_obj
 
 
+# ICLabel 7-class order (matches validation scripts / mne-icalabel convention)
+ICLABEL_CLASS_NAMES = (
+    "brain",
+    "muscle",
+    "eye",
+    "heart",
+    "line_noise",
+    "channel_noise",
+    "other",
+)
+
+_LABEL_ALIASES = {
+    "muscle_artifact": "muscle",
+    "eye_blink": "eye",
+    "heart_beat": "heart",
+}
+
+
+def _label_to_str(val) -> str:
+    if isinstance(val, bytes):
+        return val.decode("utf-8", errors="ignore")
+    return str(val).strip().lower().replace(" ", "_")
+
+
+def _canonical_icalabel_label(label: str) -> str:
+    return _LABEL_ALIASES.get(label, label)
+
+
+def _sources_as_ic_by_time(sources: np.ndarray, n_components: int) -> np.ndarray:
+    """Ensure shape (n_components, n_samples) for saving / GUI."""
+    if sources is None:
+        return None
+    arr = np.asarray(sources, dtype=np.float64)
+    if arr.ndim != 2:
+        raise ValueError(f"sources must be 2-D, got shape {arr.shape}")
+    if arr.shape[0] == n_components:
+        return arr
+    if arr.shape[1] == n_components:
+        return arr.T
+    raise ValueError(
+        f"sources shape {arr.shape} incompatible with n_components={n_components}"
+    )
+
+
+def pack_icalabel_per_ic(
+    ic_labels,
+    ic_probs,
+    n_components: int,
+) -> dict:
+    """
+    Per-IC labels and probabilities aligned with sources[i, :].
+    Returns dict with ic_labels (n,), ic_prob_top1 (n,), ic_probs_full (n, 7) or None.
+    """
+    n_ic = int(n_components)
+    label_list = ["other"] * n_ic
+    if ic_labels is not None:
+        raw_labels = np.asarray(ic_labels).ravel()
+        for i in range(min(n_ic, len(raw_labels))):
+            label_list[i] = _canonical_icalabel_label(_label_to_str(raw_labels[i]))
+
+    prob_top1 = np.full(n_ic, np.nan, dtype=np.float64)
+    probs_full = None
+
+    if ic_probs is not None:
+        p = np.asarray(ic_probs, dtype=np.float64)
+        if p.ndim == 1 and p.size == n_ic:
+            prob_top1 = p.astype(np.float64, copy=False)
+        elif p.ndim == 2:
+            if p.shape[1] == n_ic and p.shape[0] != n_ic:
+                p = p.T
+            if p.shape[0] == n_ic:
+                n_col = min(p.shape[1], len(ICLABEL_CLASS_NAMES))
+                probs_full = np.zeros((n_ic, len(ICLABEL_CLASS_NAMES)), dtype=np.float64)
+                probs_full[:, :n_col] = p[:, :n_col]
+                for i in range(n_ic):
+                    prob_top1[i] = float(np.max(probs_full[i]))
+        elif p.ndim == 1 and p.size == n_ic:
+            prob_top1 = p
+
+    # If only top-1 prob missing, default to NaN already; labels still valid
+    return {
+        "ic_labels": np.asarray(label_list, dtype=object),
+        "ic_prob_top1": prob_top1,
+        "ic_probs_full": probs_full,
+        "ic_label_classes": np.asarray(ICLABEL_CLASS_NAMES, dtype=object),
+    }
+
+
 class ORICAProcessor:
     def __init__(self, n_components=None, max_samples=10000, srate=None):
         self.n_components = n_components
@@ -63,7 +151,11 @@ class ORICAProcessor:
         # ✅ 保存最近一次的 ICLabel 结果，供 GUI 显示
         self.latest_ic_probs = None
         self.latest_ic_labels = None
-        self.eog_indices = [] 
+        self.latest_ic_label_strings = None
+        self.latest_ic_prob_top1 = None
+        self.latest_ic_probs_full = None
+        self.latest_sources_ic = None
+        self.eog_indices = []
 
 
     # evaluate the ORICA sources, but I would not use it now
@@ -226,6 +318,20 @@ class ORICAProcessor:
         self.latest_ic_probs = ic_probs
         self.latest_ic_labels = ic_labels
         self.eog_indices = eog_indices
+
+        if sources is not None:
+            sources = _sources_as_ic_by_time(sources, self.n_components)
+            self.latest_sources_ic = sources
+            meta = pack_icalabel_per_ic(ic_labels, ic_probs, self.n_components)
+            self.latest_ic_label_strings = meta["ic_labels"]
+            self.latest_ic_prob_top1 = meta["ic_prob_top1"]
+            self.latest_ic_probs_full = meta["ic_probs_full"]
+        else:
+            self.latest_sources_ic = None
+            self.latest_ic_label_strings = None
+            self.latest_ic_prob_top1 = None
+            self.latest_ic_probs_full = None
+
         print(f"Total artifacts: {self.eog_indices}")
 
   
@@ -264,6 +370,24 @@ class ORICAProcessor:
 
     def get_iclabel_results(self):
         return self.latest_ic_probs, self.latest_ic_labels
+
+    def get_labeled_ic_bundle(self):
+        """
+        IC-level bundle aligned by row index i:
+          sources[i], ic_labels[i], ic_prob_top1[i], ic_probs_full[i, :]
+        """
+        return {
+            "sources": (
+                self.latest_sources_ic.copy()
+                if self.latest_sources_ic is not None
+                else None
+            ),
+            "ic_labels": self.latest_ic_label_strings,
+            "ic_prob_top1": self.latest_ic_prob_top1,
+            "ic_probs_full": self.latest_ic_probs_full,
+            "ic_label_classes": np.asarray(ICLABEL_CLASS_NAMES, dtype=object),
+            "artifact_indices": list(self.eog_indices) if self.eog_indices else [],
+        }
     
     # use icalabel online and return the ic_probs, ic_labels, eog_indices
     def use_icalabel_online(self, data, sources, W, A, ch_names, srate,
@@ -349,34 +473,22 @@ class ORICAProcessor:
             ic_labels = labels['labels']
 
         print("labels",labels)
-        
-        # identify the artifacts
-        def _label_to_str(val):
-            if isinstance(val, bytes):
-                return val.decode("utf-8", errors="ignore")
-            return str(val)
 
-        if ic_probs is not None:
-            try:
-                probs_array = np.asarray(ic_probs, dtype=float).reshape(-1)
-            except Exception:
-                probs_array = None
-        else:
-            probs_array = None
+        meta = pack_icalabel_per_ic(ic_labels, ic_probs, n_components)
+        label_strings = meta["ic_labels"]
+        prob_top1 = meta["ic_prob_top1"]
+        probs_full = meta["ic_probs_full"]
 
         eog_indices = []
         log_details = []
-        if ic_labels is not None:
-            for i, label in enumerate(ic_labels):
-                label_str = _label_to_str(label)
-                if label_str in ["brain", "other"]:
-                    continue
-                prob = None
-                if probs_array is not None and i < probs_array.size:
-                    prob = float(probs_array[i])
-                if prob is not None and prob >= threshold:
-                    eog_indices.append(i)
-                    log_details.append((i, label_str, prob))
+        for i in range(n_components):
+            label_str = str(label_strings[i])
+            if label_str in ("brain", "other"):
+                continue
+            prob = float(prob_top1[i]) if np.isfinite(prob_top1[i]) else None
+            if prob is not None and prob >= threshold:
+                eog_indices.append(i)
+                log_details.append((i, label_str, prob))
 
         
         print(f"ICLabel identified {len(eog_indices)} artifacts: {eog_indices}")

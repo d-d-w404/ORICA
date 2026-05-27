@@ -125,10 +125,19 @@ class LSLStreamReceiver:
         self.iir_save_file = None
         self.asr_save_file = None
         self.orica_save_file = None
+        self.ic_sources_save_file = None
         self.raw_data_list = []
         self.iir_data_list = []
         self.asr_data_list = []
         self.orica_data_list = []
+        self.ic_sources_data_list = []
+        # ICLabel / IC sources：按 chunk 保存（用于可视化随时间变化的标签）
+        self.ic_chunk_sizes = []  # 每个 chunk 的样本数（与 ic_sources_data_list 一一对应）
+        self.ic_chunk_start_samples = []  # 每个 chunk 的起始样本（累加得到）
+        self.ic_labels_by_chunk = []  # list[np.ndarray] each: (n_ic,) object
+        self.ic_prob_top1_by_chunk = []  # list[np.ndarray] each: (n_ic,) float
+        self.ic_probs_full_by_chunk = []  # list[np.ndarray] each: (n_ic, 7) float or None
+        self.ic_artifact_indices_by_chunk = []  # list[np.ndarray] each: (n_art,) int
         self.last_data_time = None  # 最后一次收到数据的时间
         self.data_empty_wait_time = 5  # 数据为空后等待时间（秒）
         self.save_monitor_thread = None  # 监控线程
@@ -237,10 +246,13 @@ class LSLStreamReceiver:
                 )
                 if sources is not None:
                     cleaned = self.orica.transform(chunk)
-                    cleaned_chunk[:, :] = cleaned  
+                    cleaned_chunk[:, :] = cleaned
                     self.latest_ic_probs = ic_probs
-                    self.latest_ic_labels = ic_labels       
-                    
+                    self.latest_ic_labels = ic_labels
+                    self.latest_sources = sources
+                    if self.save_processed_data:
+                        self._append_ic_sources_snapshot()
+
         return cleaned_chunk, sources, eog_indices
 
     def pull_and_update_buffer(self):
@@ -1391,6 +1403,13 @@ class LSLStreamReceiver:
         self.iir_data_list = []
         self.asr_data_list = []
         self.orica_data_list = []
+        self.ic_sources_data_list = []
+        self.ic_chunk_sizes = []
+        self.ic_chunk_start_samples = []
+        self.ic_labels_by_chunk = []
+        self.ic_prob_top1_by_chunk = []
+        self.ic_probs_full_by_chunk = []
+        self.ic_artifact_indices_by_chunk = []
         self.last_data_time = None
         import os
         # 支持通过环境变量为多实例分别配置保存标签/目录
@@ -1419,6 +1438,7 @@ class LSLStreamReceiver:
             iir_file = save_dir / f"{file_tag}eeg_iir1.npz"
             asr_file = save_dir / f"{file_tag}eeg_asr1.npz"
             orica_file = save_dir / f"{file_tag}eeg_orica1.npz"
+            ic_sources_file = save_dir / f"{file_tag}eeg_ic_sources1.npz"
             '''
               iclablethreshold   chunk(timeout=1)
             x 0.8     0
@@ -1435,17 +1455,20 @@ class LSLStreamReceiver:
             iir_file = save_dir / f"{file_tag}eeg_iir1.npz"
             asr_file = save_dir / f"{file_tag}eeg_asr1.npz"
             orica_file = save_dir / f"{file_tag}eeg_orica1.npz"
+            ic_sources_file = save_dir / f"{file_tag}eeg_ic_sources1.npz"
         
         self.raw_save_file = Path(raw_file)
         self.iir_save_file = Path(iir_file)
         self.asr_save_file = Path(asr_file)
         self.orica_save_file = Path(orica_file)
+        self.ic_sources_save_file = Path(ic_sources_file)
         print(f"✅ 已启用数据保存")
         print(f"   file_tag: {file_tag}")
         print(f"   Raw文件: {self.raw_save_file}")
         print(f"   IIR文件: {self.iir_save_file}")
         print(f"   ASR文件: {self.asr_save_file}")
         print(f"   ORICA文件: {self.orica_save_file}")
+        print(f"   IC sources文件: {self.ic_sources_save_file}")
         print(f"   数据为空后将等待 {self.data_empty_wait_time} 秒后完成保存")
     
     def disable_processed_data_saving(self):
@@ -1458,7 +1481,35 @@ class LSLStreamReceiver:
         self.iir_data_list = []
         self.asr_data_list = []
         self.orica_data_list = []
+        self.ic_sources_data_list = []
+        self.ic_chunk_sizes = []
+        self.ic_chunk_start_samples = []
+        self.ic_labels_by_chunk = []
+        self.ic_prob_top1_by_chunk = []
+        self.ic_probs_full_by_chunk = []
+        self.ic_artifact_indices_by_chunk = []
         print("🛑 已禁用处理后数据保存")
+
+    def _append_ic_sources_snapshot(self):
+        """Append current ORICA IC sources + per-chunk ICLabel outputs."""
+        if self.orica is None or self.orica.latest_sources_ic is None:
+            return
+        src = self.orica.latest_sources_ic.copy()  # (n_ic, n_samp_chunk)
+        self.ic_sources_data_list.append(src)
+        n_samp = int(src.shape[1])
+        last_start = int(self.ic_chunk_start_samples[-1]) if self.ic_chunk_start_samples else 0
+        last_size = int(self.ic_chunk_sizes[-1]) if self.ic_chunk_sizes else 0
+        start_sample = (last_start + last_size) if self.ic_chunk_start_samples else 0
+        self.ic_chunk_sizes.append(n_samp)
+        self.ic_chunk_start_samples.append(start_sample)
+
+        bundle = self.orica.get_labeled_ic_bundle()
+        self.ic_labels_by_chunk.append(bundle.get("ic_labels"))
+        self.ic_prob_top1_by_chunk.append(bundle.get("ic_prob_top1"))
+        self.ic_probs_full_by_chunk.append(bundle.get("ic_probs_full"))
+        self.ic_artifact_indices_by_chunk.append(
+            np.asarray(bundle.get("artifact_indices", []), dtype=np.int64)
+        )
     
     def _select_channels_for_save(self, chunk):
         """统一将 chunk 转为选中通道 (len(chan_range), samples)。"""
@@ -1568,11 +1619,91 @@ class LSLStreamReceiver:
             _save_one(self.asr_save_file, all_asr, 'asr')
             _save_one(self.orica_save_file, all_orica, 'orica')
 
+            if len(self.ic_sources_data_list) > 0:
+                all_ic = np.concatenate(self.ic_sources_data_list, axis=1)
+                n_chunks = len(self.ic_sources_data_list)
+                ic_save = {
+                    "data": all_ic,
+                    "sources": all_ic,
+                    "sampling_rate": self.srate,
+                    "duration": all_ic.shape[1] / self.srate,
+                    "total_samples": all_ic.shape[1],
+                    "n_components": all_ic.shape[0],
+                    "stage": "ic_sources",
+                    "space": "ic",
+                    "n_chunks": n_chunks,
+                    "chunk_sizes": np.asarray(self.ic_chunk_sizes, dtype=np.int64),
+                    "chunk_start_samples": np.asarray(
+                        self.ic_chunk_start_samples, dtype=np.int64
+                    ),
+                    "ic_label_classes": np.asarray(
+                        [
+                            "brain",
+                            "muscle",
+                            "eye",
+                            "heart",
+                            "line_noise",
+                            "channel_noise",
+                            "other",
+                        ],
+                        dtype=object,
+                    ),
+                }
+                # per-chunk labels/probs (shape: n_chunks x n_ic)
+                try:
+                    if self.ic_labels_by_chunk:
+                        ic_save["ic_labels_by_chunk"] = np.asarray(
+                            self.ic_labels_by_chunk, dtype=object
+                        )
+                    if self.ic_prob_top1_by_chunk:
+                        ic_save["ic_prob_top1_by_chunk"] = np.asarray(
+                            self.ic_prob_top1_by_chunk, dtype=np.float64
+                        )
+                    # probs_full can be None; only save when present for all chunks
+                    if self.ic_probs_full_by_chunk and all(
+                        x is not None for x in self.ic_probs_full_by_chunk
+                    ):
+                        ic_save["ic_probs_full_by_chunk"] = np.asarray(
+                            self.ic_probs_full_by_chunk, dtype=np.float64
+                        )
+                    if self.ic_artifact_indices_by_chunk:
+                        ic_save["artifact_indices_by_chunk"] = np.asarray(
+                            self.ic_artifact_indices_by_chunk, dtype=object
+                        )
+                except Exception as _e:
+                    print(f"[WARN] Failed to pack per-chunk ICLabel arrays: {_e}")
+
+                # backward-compatible last-snapshot keys (keep old readers working)
+                if self.ic_labels_by_chunk:
+                    ic_save["ic_labels"] = self.ic_labels_by_chunk[-1]
+                if self.ic_prob_top1_by_chunk:
+                    ic_save["ic_prob_top1"] = self.ic_prob_top1_by_chunk[-1]
+                if self.ic_probs_full_by_chunk and self.ic_probs_full_by_chunk[-1] is not None:
+                    ic_save["ic_probs_full"] = self.ic_probs_full_by_chunk[-1]
+                if self.ic_artifact_indices_by_chunk:
+                    ic_save["artifact_indices"] = self.ic_artifact_indices_by_chunk[-1]
+                np.savez(self.ic_sources_save_file, **ic_save)
+                print(f"\n💾 ic_sources 数据保存完成！")
+                print(f"   文件: {self.ic_sources_save_file}")
+                print(f"   数据形状: {all_ic.shape} (n_ic, n_samples)")
+                if self.ic_labels_by_chunk:
+                    print(
+                        f"   ICLabel(最后一块): {list(self.ic_labels_by_chunk[-1])} "
+                        f"(与 sources 行索引一一对应)"
+                    )
+
             # 清空列表
             self.raw_data_list = []
             self.iir_data_list = []
             self.asr_data_list = []
             self.orica_data_list = []
+            self.ic_sources_data_list = []
+            self.ic_chunk_sizes = []
+            self.ic_chunk_start_samples = []
+            self.ic_labels_by_chunk = []
+            self.ic_prob_top1_by_chunk = []
+            self.ic_probs_full_by_chunk = []
+            self.ic_artifact_indices_by_chunk = []
             
         except Exception as e:
             print(f"❌ 保存数据失败: {e}")
