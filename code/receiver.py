@@ -520,8 +520,6 @@ class LSLStreamReceiver:
                 #     self.raw_buffer = np.roll(self.raw_buffer, -n_in, axis=1)
                 #     self.raw_buffer[:, -n_in:] = chunk_after_iir
 
-
-
             
             # 保存处理后的数据到文件（每次追加）
             if self.save_processed_data:
