@@ -102,16 +102,20 @@ class ORICA_final_new:
 
 
     def initialize(self, X_init):
-        """初始化ORICA"""
+        """初始化ORICA
+
+        Args:
+            X_init: np.ndarray, shape = (channels, samples)，与 MNE/LSL 一致
+        """
         # 检查数据长度是否足够
-        if X_init.shape[0] < 2:
-            print(f"⚠️ 初始化数据长度不足: {X_init.shape[0]}，跳过初始化")
+        if X_init.shape[1] < 2:
+            print(f"⚠️ 初始化数据长度不足: {X_init.shape[1]}，跳过初始化")
             return X_init
         
         # 检查并调整n_components以匹配数据维度
-        if X_init.shape[1] != self.n_components:  # X_init是 (samples, channels) 格式
-            print(f"⚠️ 初始化维度不匹配: 期望{self.n_components}通道，实际{X_init.shape[1]}通道")
-            self.n_components = X_init.shape[1]
+        if X_init.shape[0] != self.n_components:
+            print(f"⚠️ 初始化维度不匹配: 期望{self.n_components}通道，实际{X_init.shape[0]}通道")
+            self.n_components = X_init.shape[0]
             # 重新创建W矩阵以匹配新的维度
             self.W = np.eye(self.n_components)
             print(f"✅ 调整n_components为{self.n_components}")
@@ -1064,16 +1068,15 @@ class ORICA_final_new:
         """
         用 ORICA_final.py 中的 orica_rls_whitening 进行白化+ORICA，并返回源信号（sources）。
         - 输入:
-        data: np.ndarray, shape = (samples, channels)
+        data: np.ndarray, shape = (channels, samples)
         - 返回:
-        sources: np.ndarray, shape = (samples, components)  # 与输入 samples 对齐
+        sources: np.ndarray, shape = (components, samples)
         weights: np.ndarray, shape = (components, components)  # icaweights
         sphere:  np.ndarray, shape = (components, components)  # icasphere
         """
-        assert isinstance(data, np.ndarray) and data.ndim == 2, "data必须是(samples, channels)的二维ndarray"
+        assert isinstance(data, np.ndarray) and data.ndim == 2, "data必须是(channels, samples)的二维ndarray"
 
-        # 统一到 (channels, samples)
-        X = data.T.astype(np.float64, copy=False)
+        X = data.astype(np.float64, copy=False)
 
         # 调用你文件内的白化+ORICA主流程，得到权重和白化矩阵
 
@@ -1103,22 +1106,19 @@ class ORICA_final_new:
 
 
 
-        # 返回为 (samples, components)
         return sources, weights, sphere
 
 
     def transform(self, X):
-        """变换数据"""
-        X_whitened = X @ self.whitening_matrix.T
-        Y = (self.W @ X_whitened.T).T
-        return Y
+        """变换数据: (channels, samples) -> (components, samples)"""
+        X_whitened = self.whitening_matrix @ X
+        return self.W @ X_whitened
 
     
     def inverse_transform(self, Y):
-        """逆变换"""
-        Xw = np.linalg.pinv(self.W) @ Y.T
-        X = Xw.T @ np.linalg.pinv(self.whitening_matrix).T 
-        return X
+        """逆变换: (components, samples) -> (channels, samples)"""
+        Xw = np.linalg.pinv(self.W) @ Y
+        return np.linalg.pinv(self.whitening_matrix) @ Xw
 
 
     def get_W(self):
@@ -1274,15 +1274,10 @@ if __name__ == "__main__":
 
 
 
-    X = win_data
-    # 确保数据是 (samples, channels) 格式
-    if X.shape[0] < X.shape[1]:
-        X = X.T
-    print(f"调整后的数据形状: {X.shape}")
+    X = win_data  # (channels, samples)
+    print(f"数据形状: {X.shape}")
 
-        # 创建 ORICA 实例
-    #n_components = min(X.shape[1], 14)  # 使用通道数或14，取较小值
-    n_components = X.shape[1]
+    n_components = X.shape[0]
     orica = ORICA_final_new(
         n_components=n_components,
         learning_rate=0.001,
@@ -1331,14 +1326,9 @@ if __name__ == "__main__":
     print(f"加载的数据形状: {X.shape}")
     print(f"加载的数据: {X[0:3,0:3]}")
     
-    # 确保数据是 (samples, channels) 格式
-    if X.shape[0] < X.shape[1]:
-        X = X.T
-    print(f"调整后的数据形状: {X.shape}")
+    print(f"数据形状: {X.shape}")
     
-    # 创建 ORICA 实例
-    #n_components = min(X.shape[1], 14)  # 使用通道数或14，取较小值
-    n_components = X.shape[1]
+    n_components = X.shape[0]
     orica = ORICA_final_new(
         n_components=n_components,
         learning_rate=0.001,
@@ -1382,13 +1372,13 @@ if __name__ == "__main__":
     
     # 评估分离效果
     print("\n=== 分离效果评估 ===")
-    kurtosis_values = orica.evaluate_separation(sources.T)
+    kurtosis_values = orica.evaluate_separation(sources.T)  # evaluate_separation 按列算峰度
     print(f"峰度值: {kurtosis_values}")
     print(f"平均峰度: {np.mean(np.abs(kurtosis_values)):.4f}")
     
     # 计算互信息
-    if sources.shape[1] <= 10:  # 只对少量成分计算互信息
-        mi_matrix = orica.calc_mutual_info_matrix(sources.T)
+    if sources.shape[0] <= 10:  # 只对少量成分计算互信息
+        mi_matrix = orica.calc_mutual_info_matrix(sources)
         print(f"互信息矩阵对角线外均值: {np.mean(mi_matrix[np.triu_indices_from(mi_matrix, k=1)]):.4f}")
     
     print("ORICA 处理完成!")

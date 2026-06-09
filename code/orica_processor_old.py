@@ -168,10 +168,10 @@ class ORICAProcessor:
         if self.ica is None:
             print("Create ORICA instance")
             self.ica = ORICA_final_new(n_components=min(self.n_components, data.shape[0]),srate=self.srate)
-            self.ica.initialize(data.T)
-            sources,weight,sphere = self.ica.fit(data.T)
+            self.ica.initialize(data)
+            sources,weight,sphere = self.ica.fit(data)
         else:
-            sources,weight,sphere = self.ica.fit(data.T)
+            sources,weight,sphere = self.ica.fit(data)
             # print('data.T.shape',data.T.shape)
             # print("sources",sources.shape)#(22,5000)
 
@@ -320,10 +320,10 @@ class ORICAProcessor:
     def transform(self, new_data):
         if self.ica is None:
             return new_data
-        sources = self.ica.transform(new_data.T)
-        sources[:, self.eog_indices] = 0  # Zero out EOG components
+        sources = self.ica.transform(new_data)
+        sources[self.eog_indices, :] = 0  # Zero out artifact ICs
         cleaned = self.ica.inverse_transform(sources)
-        return cleaned.T
+        return cleaned
 
 
     def update_buffer(self, new_chunk):
