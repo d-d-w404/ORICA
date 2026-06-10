@@ -765,12 +765,9 @@ class ORICA_final_new:
         #data = state['icasphere'] @ data  # 对应MATLAB: data = state.icasphere * data;
         # save_txt("14.txt", data)  # 保存预白化后的数据
         
-        # 数据分块 - 确保每个块都是固定的block_size_white大小
-        num_block = int(np.floor(nPts / block_size_white))
-        print("num_block",num_block)
-
-        numsplits = nPts // block_size_white  # 等同于 MATLAB 的 floor(nPts/blockSize)
-        print("numsplits",numsplits)
+        # 数据分块（块数 = floor(nPts / block_size_white)，MATLAB numsplits）
+        numsplits = nPts // block_size_white
+        print("numsplits", numsplits)
 
         
         if verbose:
@@ -783,7 +780,7 @@ class ORICA_final_new:
             # print(data[:3])
             #range(1)就只有一个数
             #for bi in range(11):
-            for bi in range(num_block):
+            for bi in range(numsplits):
                 # # 计算当前数据块范围 - 确保每个块都是固定的block_size_white大小
                 # start_idx = bi * block_size_white
                 # end_idx = min(nPts, (bi + 1) * block_size_white)
